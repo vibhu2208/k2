@@ -18,6 +18,10 @@ const REMOTE_SAFE_KEYS = new Set([
   'destinations_list',
   'operators_list',
   'companies_list',
+  'fill_vehicles_list',
+  'fill_destinations_list',
+  'fill_schedule_notes_list',
+  'trip_image_prompt',
 ]);
 
 const LIST_KEYS = {
@@ -26,6 +30,9 @@ const LIST_KEYS = {
   destinations: 'destinations_list',
   operators: 'operators_list',
   companies: 'companies_list',
+  fill_vehicles: 'fill_vehicles_list',
+  fill_destinations: 'fill_destinations_list',
+  fill_schedule_notes: 'fill_schedule_notes_list',
 };
 
 function assertRemoteKey(key) {

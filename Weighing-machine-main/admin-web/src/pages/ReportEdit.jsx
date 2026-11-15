@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { reportsListPath } from '../lib/reportsListState.js';
 import { api } from '../api/client.js';
 import { fmtDate, fmtKg, toDatetimeLocalValue } from '../lib/format.js';
+import blankPhotoUrl from '../assets/blank-photo.png';
 
 const PHOTO_SLOTS = [1, 2, 3];
 
@@ -31,6 +33,7 @@ function PhotoSlot({
   existingUrl,
   previewUrl,
   onFileChange,
+  onUseBlankImage,
   disabled,
 }) {
   return (
@@ -49,7 +52,17 @@ function PhotoSlot({
         ) : existingUrl ? (
           <img src={existingUrl} alt={title} className="h-full w-full object-cover" />
         ) : (
-          <span className="text-[10px] text-slate-500 px-2 text-center">No photo</span>
+          <div className="flex flex-col items-center gap-2">
+            <span className="text-[10px] text-slate-500 px-2 text-center">No photo</span>
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              disabled={disabled}
+              onClick={() => onUseBlankImage(pass, slot)}
+            >
+              Use blank image
+            </button>
+          </div>
         )}
       </div>
     </div>
@@ -59,6 +72,8 @@ function PhotoSlot({
 export default function ReportEdit() {
   const { slip } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const reportsBackTo = reportsListPath(searchParams);
   const [report, setReport] = useState(null);
   const [form, setForm] = useState({});
   const [photos, setPhotos] = useState({});
@@ -136,6 +151,18 @@ export default function ReportEdit() {
     });
   }
 
+  async function onUseBlankImage(pass, slot) {
+    setError('');
+    try {
+      const response = await fetch(blankPhotoUrl);
+      if (!response.ok) throw new Error('Could not load the blank image');
+      const file = new File([await response.blob()], 'blank-photo.png', { type: 'image/png' });
+      onPhotoFileChange(pass, slot, file);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function uploadPhoto(pass, slot, file) {
     if (!file) return null;
     const uploaded = await api.uploadMirrorPhoto(slip, slot, file, pass);
@@ -180,7 +207,7 @@ export default function ReportEdit() {
         `Edit queued for weighbridge PC (command ${result.command?.id?.slice(0, 8)}…). Status: ${result.command?.status}. PDF will regenerate on the PC after sync.`,
       );
       if (savedSlip && savedSlip !== slip) {
-        navigate(`/reports/${encodeURIComponent(savedSlip)}/edit`, { replace: true });
+        navigate(`/reports/${encodeURIComponent(savedSlip)}/edit${searchParams.toString() ? `?${searchParams.toString()}` : ''}`, { replace: true });
       }
     } catch (err) {
       setError(err.message);
@@ -198,7 +225,53 @@ export default function ReportEdit() {
     try {
       const result = await api.deleteReport(slip);
       setMessage(`Delete queued (command ${result.command?.id?.slice(0, 8)}…)`);
-      setTimeout(() => navigate('/reports'), 1500);
+      setTimeout(() => navigate(reportsBackTo), 1500);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onCancelTicket() {
+    const already = String(report?.ticket_status || '').toUpperCase() === 'CANCELLED';
+    if (
+      !window.confirm(
+        already
+          ? `Re-queue cancel for ${slip} on the weighbridge PC?`
+          : `Cancel report ${slip}? Sets fields to CANCEL / 0 kg (same as void slips) on cloud and the weighbridge PC.`,
+      )
+    ) {
+      return;
+    }
+    if (!already && !window.confirm(`Confirm cancel ${slip}? This cannot be undone from here.`)) {
+      return;
+    }
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await api.cancelReport(slip);
+      setMessage(
+        `${result.requeued ? 'Cancel re-queued' : 'Cancel queued'} for weighbridge PC (command ${result.command?.id?.slice(0, 8)}…). Status: ${result.command?.status}.`,
+      );
+      const refreshed = await api.getReport(slip);
+      const r = refreshed.report;
+      if (r) {
+        setReport(r);
+        setForm((prev) => ({
+          ...prev,
+          material: r.material || 'CANCEL',
+          customer_name: r.customer_name || 'CANCEL',
+          destination: r.destination || 'CANCEL',
+          operator_name: r.operator_name || 'CANCEL',
+          truck_number: r.truck_number || prev.truck_number,
+          gross_weight: r.gross_weight ?? 0,
+          tare_weight: r.tare_weight ?? 0,
+          timestamp_in: toDatetimeLocalValue(r.timestamp_in),
+          timestamp_out: toDatetimeLocalValue(r.timestamp_out || r.timestamp_in),
+        }));
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -211,7 +284,7 @@ export default function ReportEdit() {
     return (
       <div>
         <p className="text-red-400">{error}</p>
-        <Link to="/reports" className="text-brand-400 text-sm mt-2 inline-block">
+        <Link to={reportsBackTo} className="text-brand-400 text-sm mt-2 inline-block">
           Back to reports
         </Link>
       </div>
@@ -224,12 +297,13 @@ export default function ReportEdit() {
     <div className="space-y-4 max-w-3xl">
       <div className="flex items-center justify-between">
         <div>
-          <Link to="/reports" className="text-xs text-brand-400 hover:underline">
+          <Link to={reportsBackTo} className="text-xs text-brand-400 hover:underline">
             ← Reports
           </Link>
           <h2 className="text-xl font-semibold mt-1">Edit report {slip}</h2>
           <p className="text-sm text-slate-400">
-            {form.truck_number || report?.truck_number} · Net {fmtKg(report?.net_weight)} · Closed{' '}
+            {form.truck_number || report?.truck_number} · Net {fmtKg(report?.net_weight)} ·{' '}
+            {report?.ticket_status === 'CANCELLED' ? 'Cancelled' : 'Closed'}{' '}
             {fmtDate(report?.timestamp_out)}
           </p>
         </div>
@@ -242,7 +316,11 @@ export default function ReportEdit() {
               setPdfBusy(true);
               setError('');
               try {
-                await api.downloadReportPdf(report.slip_number || slip);
+                await api.downloadReportPdf(
+                  report.slip_number || slip,
+                  report.truck_number,
+                  report.timestamp_out || report.timestamp_in,
+                );
               } catch (err) {
                 setError(err.message);
               } finally {
@@ -373,6 +451,7 @@ export default function ReportEdit() {
                     existingUrl={report?.[`${columnPrefix}_${slot}_url`]}
                     previewUrl={previews[photoKey(pass, slot)]}
                     onFileChange={onPhotoFileChange}
+                    onUseBlankImage={onUseBlankImage}
                     disabled={saving}
                   />
                 ))}
@@ -384,9 +463,19 @@ export default function ReportEdit() {
         {message && <p className="text-sm text-emerald-400">{message}</p>}
         {error && <p className="text-sm text-red-400">{error}</p>}
 
-        <div className="flex gap-2 pt-2">
+        <div className="flex flex-wrap gap-2 pt-2">
           <button type="submit" className="btn-primary" disabled={saving}>
             {saving ? 'Saving…' : 'Save & regenerate on weighbridge'}
+          </button>
+          <button
+            type="button"
+            className="btn-ghost text-amber-300 border border-amber-700/50"
+            disabled={saving}
+            onClick={onCancelTicket}
+          >
+            {String(report?.ticket_status || '').toUpperCase() === 'CANCELLED'
+              ? 'Re-queue cancel on PC'
+              : 'Cancel ticket (CANCEL / 0 kg)'}
           </button>
           <button type="button" className="btn-danger" disabled={saving} onClick={onDelete}>
             Delete report

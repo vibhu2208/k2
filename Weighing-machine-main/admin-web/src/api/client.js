@@ -1,3 +1,5 @@
+import { reportPdfFilename } from '../lib/format.js';
+
 // In dev, Vite proxies API routes to admin-api (no CORS). Production uses VITE_API_URL.
 const API_URL = import.meta.env.DEV
   ? ''
@@ -59,7 +61,7 @@ function fileToDataUrl(file) {
   });
 }
 
-async function downloadPdfBlob(path, filename) {
+async function fetchPdfBlob(path) {
   const headers = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -86,15 +88,22 @@ async function downloadPdfBlob(path, filename) {
     throw new Error(json.error || `PDF download failed (${res.status})`);
   }
 
-  const blob = await res.blob();
+  return res.blob();
+}
+
+function saveBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = filename || 'report.pdf';
+  a.download = filename || 'download';
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+async function downloadPdfBlob(path, filename) {
+  saveBlob(await fetchPdfBlob(path), filename || 'report.pdf');
 }
 
 export const api = {
@@ -118,8 +127,11 @@ export const api = {
     return request(`/reports/${encodeURIComponent(slip)}`);
   },
 
-  async downloadReportPdf(slip) {
-    return downloadPdfBlob(`/reports/${encodeURIComponent(slip)}/pdf`, `${slip}_report.pdf`);
+  async downloadReportPdf(slip, truckNumber, reportDate) {
+    return downloadPdfBlob(
+      `/reports/${encodeURIComponent(slip)}/pdf`,
+      reportPdfFilename(truckNumber, reportDate),
+    );
   },
 
   editReport(slip, body) {
@@ -131,6 +143,13 @@ export const api = {
 
   deleteReport(slip) {
     return request(`/reports/${encodeURIComponent(slip)}/delete`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  },
+
+  cancelReport(slip) {
+    return request(`/reports/${encodeURIComponent(slip)}/cancel`, {
       method: 'POST',
       body: JSON.stringify({}),
     });
@@ -200,6 +219,35 @@ export const api = {
     });
   },
 
+  presignMedia(key) {
+    return request(`/media/presign?${new URLSearchParams({ key }).toString()}`);
+  },
+
+  async uploadFillVehicleStill(plate, pass, slot, file) {
+    const imageBase64 = await fileToDataUrl(file);
+    return request('/media/fill-vehicle-still', {
+      method: 'POST',
+      body: JSON.stringify({
+        plate,
+        pass,
+        slot,
+        contentType: file.type || 'image/jpeg',
+        imageBase64,
+      }),
+    });
+  },
+
+  getTripImagePrompt() {
+    return request('/settings/trip-image-prompt');
+  },
+
+  generateRemoteTripPhoto(id, { pass, slot }) {
+    return request(`/remote-trips/${encodeURIComponent(id)}/generate-photo`, {
+      method: 'POST',
+      body: JSON.stringify({ pass, slot }),
+    });
+  },
+
   getUploadUrl(slip, slot, contentType, pass = 'departure') {
     return request('/media/upload-url', {
       method: 'POST',
@@ -254,10 +302,44 @@ export const api = {
     });
   },
 
+  updateRemoteTrip(id, body) {
+    return request(`/remote-trips/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+
+  importRemoteTrips(trips, { dryRun = false } = {}) {
+    return request('/remote-trips/bulk', {
+      method: 'POST',
+      body: JSON.stringify({ trips, dry_run: dryRun }),
+    });
+  },
+
   attachRemoteTripPhotos(id, photoS3Keys) {
     return request(`/remote-trips/${encodeURIComponent(id)}/photos`, {
       method: 'PATCH',
       body: JSON.stringify({ photoS3Keys }),
+    });
+  },
+
+  resyncRemoteTrip(id) {
+    return request(`/remote-trips/${encodeURIComponent(id)}/resync`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  },
+
+  deleteRemoteTrip(id) {
+    return request(`/remote-trips/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  cancelRemoteTrip(id) {
+    return request(`/remote-trips/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({}),
     });
   },
 
@@ -268,9 +350,28 @@ export const api = {
     );
   },
 
+  fetchRemoteTripPdfBlob(id, params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    const suffix = qs ? `?${qs}` : '';
+    return fetchPdfBlob(`/remote-trips/${encodeURIComponent(id)}/pdf${suffix}`);
+  },
+
+  saveBlob,
+
   getSlipReservations(params = {}) {
     const qs = new URLSearchParams(params).toString();
     return request(`/slip-reservations?${qs}`);
+  },
+
+  getHeldSlipWindows(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/slip-reservations/held-windows${qs ? `?${qs}` : ''}`);
+  },
+
+  getVehicleTares(trucks, since) {
+    const params = { trucks: trucks.join(',') };
+    if (since) params.since = since;
+    return request(`/slip-reservations/vehicle-tares?${new URLSearchParams(params).toString()}`);
   },
 
   getSlipReservationHint() {

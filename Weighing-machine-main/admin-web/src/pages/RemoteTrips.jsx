@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client.js';
 import Badge from '../components/Badge.jsx';
+import CancelRemoteTripButton from '../components/CancelRemoteTripButton.jsx';
+import CreateTripImagesButton from '../components/CreateTripImagesButton.jsx';
+import RemoveRemoteTripButton from '../components/RemoveRemoteTripButton.jsx';
 import { fmtDate, fmtKg, toDatetimeLocalValue } from '../lib/format.js';
 
 const PHOTO_SLOTS = [1, 2, 3];
@@ -15,6 +18,19 @@ function isHywa(vehicleType) {
 
 function isOpenTicket(status) {
   return String(status || '').toUpperCase() === 'OPEN';
+}
+
+function isCancelledTicket(status) {
+  return String(status || '').toUpperCase() === 'CANCELLED';
+}
+
+/** HYWA: 1st weigh = gross (in), 2nd = tare (out). Others: in = tare, out = gross. */
+function grossAt(row) {
+  return isHywa(row?.vehicle_type) ? row?.timestamp_in : row?.timestamp_out;
+}
+
+function tareAt(row) {
+  return isHywa(row?.vehicle_type) ? row?.timestamp_out : row?.timestamp_in;
 }
 
 function photoPassesFor(vehicleType, ticketStatus) {
@@ -498,6 +514,33 @@ function emptyForm() {
   };
 }
 
+function formFromTrip(trip) {
+  const open = isOpenTicket(trip?.ticket_status);
+  return {
+    reservation_id: '',
+    slip_number: trip?.slip_number || '',
+    replace_existing: false,
+    ticket_status: open ? 'OPEN' : 'CLOSED',
+    truck_number: trip?.truck_number || '',
+    rfid_tag: trip?.rfid_tag || '',
+    transporter: trip?.transporter || '',
+    vehicle_type: trip?.vehicle_type || 'HYWA',
+    customer_name: trip?.customer_name || '',
+    destination: trip?.destination || '',
+    material: trip?.material || '',
+    operator_name: trip?.operator_name || '',
+    tare_weight: trip?.tare_weight != null && trip?.tare_weight !== '' ? String(trip.tare_weight) : '',
+    gross_weight:
+      trip?.gross_weight != null && trip?.gross_weight !== '' ? String(trip.gross_weight) : '',
+    timestamp_in: trip?.timestamp_in
+      ? toDatetimeLocalValue(trip.timestamp_in)
+      : defaultDatetimeLocal(-HOUR_MS),
+    timestamp_out: trip?.timestamp_out
+      ? toDatetimeLocalValue(trip.timestamp_out)
+      : defaultDatetimeLocal(),
+  };
+}
+
 /** Map planned gap time onto weigh timestamps for the vehicle type. */
 function timesFromPlanned(plannedAt, vehicleType, ticketStatus) {
   const planned = new Date(plannedAt);
@@ -549,7 +592,9 @@ export default function RemoteTrips() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [pdfBusy, setPdfBusy] = useState('');
+  const [imageBusyId, setImageBusyId] = useState('');
   const [createdTrip, setCreatedTrip] = useState(null);
+  const [editingId, setEditingId] = useState('');
   const [listsReady, setListsReady] = useState(false);
 
   const loadTrips = useCallback(async () => {
@@ -638,7 +683,7 @@ export default function RemoteTrips() {
     const reservationId = searchParams.get('reservation');
     if (!reservationId || !reservations.length) return;
     const row = reservations.find((r) => r.id === reservationId);
-    if (!row) return;
+    if (!row || row.weighbridge_conflict) return;
     applyReservation(row);
     setSearchParams({}, { replace: true });
   }, [searchParams, reservations, setSearchParams]);
@@ -668,12 +713,31 @@ export default function RemoteTrips() {
   const entry = submittedBody(form);
 
   function onReservationChange(id) {
+    if (editingId) return;
     if (!id) {
       applyReservation(null);
       return;
     }
     const row = reservations.find((r) => r.id === id);
     applyReservation(row || null);
+  }
+
+  function startEdit(row) {
+    if (!row?.id || isCancelledTicket(row.ticket_status)) return;
+    setEditingId(row.id);
+    setForm(formFromTrip(row));
+    setPhotos({});
+    setCreatedTrip(null);
+    setError('');
+    setMessage(`Editing ${row.slip_number} — Waiting and Pending trips can be updated here.`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function cancelEdit() {
+    setEditingId('');
+    setForm(emptyForm());
+    setPhotos({});
+    setMessage('');
   }
 
   async function uploadPhoto(slip, pass, slot, file) {
@@ -699,9 +763,10 @@ export default function RemoteTrips() {
       const chosenSlip = form.slip_number.trim().toUpperCase() || undefined;
       const photoS3Keys = [];
       const photoPasses = photoPassesFor(form.vehicle_type, form.ticket_status);
+      const isEdit = Boolean(editingId);
 
-      // When slip is known up front, upload photos BEFORE create so the PC
-      // import (triggered on INSERT) already has S3 keys.
+      // When slip is known up front, upload photos BEFORE create/update so the PC
+      // import already has S3 keys.
       if (chosenSlip) {
         for (const { pass } of photoPasses) {
           for (const slot of PHOTO_SLOTS) {
@@ -718,45 +783,61 @@ export default function RemoteTrips() {
         ...form,
         ticket_status: open ? 'OPEN' : 'CLOSED',
         slip_number: chosenSlip,
-        reservation_id: form.reservation_id || undefined,
-        replace_existing: Boolean(form.replace_existing),
-        photoS3Keys: chosenSlip ? photoS3Keys : undefined,
+        reservation_id: isEdit ? undefined : form.reservation_id || undefined,
+        replace_existing: isEdit ? false : Boolean(form.replace_existing),
+        photoS3Keys: chosenSlip && photoS3Keys.length ? photoS3Keys : undefined,
         timestamp_in: new Date(form.timestamp_in).toISOString(),
         timestamp_out: open ? null : new Date(form.timestamp_out).toISOString(),
         tare_weight: open && isHywa(form.vehicle_type) ? null : form.tare_weight,
         gross_weight: open && !isHywa(form.vehicle_type) ? null : form.gross_weight,
       };
 
-      const { trip } = await api.createRemoteTrip(payload);
-
-      // Auto-assigned slip: upload+attach after create (re-queues PC if it synced early).
-      if (!chosenSlip) {
-        for (const { pass } of photoPasses) {
-          for (const slot of PHOTO_SLOTS) {
-            const file = photos[photoKey(pass, slot)];
-            if (!file) continue;
-            // eslint-disable-next-line no-await-in-loop
-            const uploaded = await uploadPhoto(trip.slip_number, pass, slot, file);
-            photoS3Keys.push(uploaded);
-          }
-        }
+      let trip;
+      let localEditQueued = false;
+      if (isEdit) {
+        const result = await api.updateRemoteTrip(editingId, payload);
+        trip = result.trip;
+        localEditQueued = Boolean(result.localEditQueued);
         if (photoS3Keys.length) {
           await api.attachRemoteTripPhotos(trip.id, photoS3Keys);
+        }
+      } else {
+        const created = await api.createRemoteTrip(payload);
+        trip = created.trip;
+
+        // Auto-assigned slip: upload+attach after create (re-queues PC if it synced early).
+        if (!chosenSlip) {
+          for (const { pass } of photoPasses) {
+            for (const slot of PHOTO_SLOTS) {
+              const file = photos[photoKey(pass, slot)];
+              if (!file) continue;
+              // eslint-disable-next-line no-await-in-loop
+              const uploaded = await uploadPhoto(trip.slip_number, pass, slot, file);
+              photoS3Keys.push(uploaded);
+            }
+          }
+          if (photoS3Keys.length) {
+            await api.attachRemoteTripPhotos(trip.id, photoS3Keys);
+          }
         }
       }
 
       const kind = open ? 'Open ticket' : 'Remote trip';
-      const followUp = open
-        ? 'The weighbridge PC will import it as an open ticket so the second weigh can close it on site.'
-        : 'The weighbridge PC will import it within ~30 seconds when online.';
+      const action = isEdit ? 'updated' : 'created';
+      const followUp = localEditQueued
+        ? 'Queued an edit to the weighbridge PC.'
+        : open
+          ? 'The weighbridge PC will import it as an open ticket so the second weigh can close it on site.'
+          : 'Waiting trips stay scheduled until close time; Pending trips sync on the next pull.';
       if (photoS3Keys.length) {
         setMessage(
-          `${kind} ${trip.slip_number} created with ${photoS3Keys.length} photo(s). ${followUp}`,
+          `${kind} ${trip.slip_number} ${action} with ${photoS3Keys.length} photo(s). ${followUp}`,
         );
       } else {
-        setMessage(`${kind} ${trip.slip_number} created (no photos attached). ${followUp}`);
+        setMessage(`${kind} ${trip.slip_number} ${action}. ${followUp}`);
       }
       setCreatedTrip(trip);
+      setEditingId('');
       setForm(emptyForm());
       setPhotos({});
       loadTrips();
@@ -773,19 +854,40 @@ export default function RemoteTrips() {
       <div>
         <h2 className="text-xl font-semibold">Remote trip entry</h2>
         <p className="text-sm text-slate-400 mt-1">
-          Create a closed trip or an open ticket in the cloud. Closed trips with a future close
-          time wait until that time; past close times and open tickets sync on the next pull.
+          Create a closed trip or an open ticket in the cloud, then use Edit on any Waiting or
+          Pending row to change weights, times, vehicle, or masters. Closed trips with a future
+          close time wait until that time; past close times and open tickets sync on the next pull.
           Remote trips are for <span className="text-slate-200 font-medium">DCC only</span> (not MKG
           or other companies).{' '}
           <Link to="/plan-gaps" className="text-brand-300 hover:underline">
             Plan slip gaps
           </Link>{' '}
-          to schedule times; slips block automatically 5 minutes before each planned time.
+          to schedule times; slips block automatically 5 minutes before each planned time. Have
+          many trips?{' '}
+          <Link to="/remote-trips/import" className="text-brand-300 hover:underline">
+            Bulk import from JSON
+          </Link>
+          {' · '}
+          <Link to="/bulk-photos" className="text-brand-300 hover:underline">
+            Bulk vehicle photos
+          </Link>
+          .
         </p>
       </div>
 
       <form onSubmit={onSubmit} className="card p-5 space-y-4">
-        <h3 className="text-sm font-medium text-slate-200">New remote trip</h3>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-medium text-slate-200">
+            {editingId
+              ? `Edit remote trip ${form.slip_number || ''}`.trim()
+              : 'New remote trip'}
+          </h3>
+          {editingId ? (
+            <button type="button" className="btn-ghost text-xs" onClick={cancelEdit} disabled={saving}>
+              Cancel edit
+            </button>
+          ) : null}
+        </div>
 
         <div>
           <label className="text-xs text-slate-400">Ticket</label>
@@ -824,12 +926,22 @@ export default function RemoteTrips() {
             className="field-input mt-1"
             value={form.reservation_id}
             onChange={(e) => onReservationChange(e.target.value)}
+            disabled={Boolean(editingId)}
           >
-            <option value="">None — allocate new slip at end of series</option>
+            <option value="">
+              {editingId ? 'Slip locked while editing' : 'None — allocate new slip at end of series'}
+            </option>
             {reservations.map((r) => (
-              <option key={r.id} value={r.id}>
+              <option key={r.id} value={r.id} disabled={!!r.weighbridge_conflict}>
                 {r.slip_number} · planned {fmtDate(r.planned_at)}
                 {r.note ? ` · ${r.note}` : ''}
+                {r.weighbridge_conflict
+                  ? ` · used on weighbridge${
+                      r.weighbridge_conflict.truck_number
+                        ? ` (${r.weighbridge_conflict.truck_number})`
+                        : ''
+                    }`
+                  : ''}
               </option>
             ))}
           </select>
@@ -867,10 +979,10 @@ export default function RemoteTrips() {
               onChange={(e) =>
                 updateField('slip_number', e.target.value.toUpperCase().replace(/[\s-]/g, ''))
               }
-              readOnly={!!form.reservation_id}
+              readOnly={!!form.reservation_id || Boolean(editingId)}
             />
             <FieldHint message={fieldErrors.slip_number} />
-            {!!form.slip_number.trim() && !form.reservation_id && (
+            {!!form.slip_number.trim() && !form.reservation_id && !editingId && (
               <label className="mt-2 flex items-start gap-2 text-xs text-slate-400">
                 <input
                   type="checkbox"
@@ -1080,10 +1192,14 @@ export default function RemoteTrips() {
         <div className="flex flex-wrap gap-2 pt-1">
           <button type="submit" className="btn-primary" disabled={saving || fieldCheckFailed}>
             {saving
-              ? 'Creating…'
-              : isOpenTicket(form.ticket_status)
-                ? 'Create open ticket'
-                : 'Create remote trip'}
+              ? editingId
+                ? 'Saving…'
+                : 'Creating…'
+              : editingId
+                ? 'Save changes'
+                : isOpenTicket(form.ticket_status)
+                  ? 'Create open ticket'
+                  : 'Create remote trip'}
           </button>
           {createdTrip?.id && (
             <button
@@ -1136,9 +1252,12 @@ export default function RemoteTrips() {
                 <th className="p-3">Vehicle</th>
                 <th className="p-3">Customer</th>
                 <th className="p-3">Net</th>
+                <th className="p-3">Gross time</th>
+                <th className="p-3">Tare time</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Sync</th>
                 <th className="p-3">MCG</th>
+                <th className="p-3">Images</th>
                 <th className="p-3">PDF</th>
               </tr>
             </thead>
@@ -1146,16 +1265,41 @@ export default function RemoteTrips() {
               {rows.map((row) => (
                 <tr key={row.id} className="border-b border-slate-800/60">
                   <td className="p-3 font-mono text-xs">{row.slip_number}</td>
-                  <td className="p-3">{row.truck_number}</td>
+                  <td className="p-3">
+                    {row.truck_number}
+                    <div className="text-xs text-slate-500">{row.vehicle_type || ''}</div>
+                  </td>
                   <td className="p-3">{row.customer_name}</td>
                   <td className="p-3">{fmtKg(row.net_weight)}</td>
+                  <td className="p-3 text-xs text-slate-300 whitespace-nowrap">
+                    {grossAt(row) ? fmtDate(grossAt(row)) : '—'}
+                  </td>
+                  <td className="p-3 text-xs text-slate-300 whitespace-nowrap">
+                    {tareAt(row) ? fmtDate(tareAt(row)) : '—'}
+                  </td>
                   <td className="p-3">
-                    <Badge tone={isOpenTicket(row.ticket_status) ? 'warning' : 'success'}>
-                      {isOpenTicket(row.ticket_status) ? 'Open' : 'Closed'}
+                    <Badge
+                      tone={
+                        isCancelledTicket(row.ticket_status)
+                          ? 'danger'
+                          : isOpenTicket(row.ticket_status)
+                            ? 'warning'
+                            : 'success'
+                      }
+                    >
+                      {isCancelledTicket(row.ticket_status)
+                        ? 'Cancelled'
+                        : isOpenTicket(row.ticket_status)
+                          ? 'Open'
+                          : 'Closed'}
                     </Badge>
-                    <div className="text-xs text-slate-500 mt-1">
-                      {fmtDate(isOpenTicket(row.ticket_status) ? row.timestamp_in : row.timestamp_out)}
-                    </div>
+                    <CancelRemoteTripButton
+                      tripId={row.id}
+                      alreadyCancelled={isCancelledTicket(row.ticket_status)}
+                      disabled={Boolean(imageBusyId) || Boolean(pdfBusy)}
+                      onDone={loadTrips}
+                      onError={(err) => setError(err.message)}
+                    />
                   </td>
                   <td className="p-3">
                     <Badge
@@ -1173,8 +1317,37 @@ export default function RemoteTrips() {
                           ? 'Synced'
                           : 'Pending'}
                     </Badge>
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      {!isCancelledTicket(row.ticket_status) && (
+                        <button
+                          type="button"
+                          className="text-brand-300 hover:underline text-xs disabled:opacity-50"
+                          disabled={Boolean(imageBusyId) || Boolean(pdfBusy) || saving}
+                          onClick={() => startEdit(row)}
+                        >
+                          {editingId === row.id ? 'Editing…' : 'Edit'}
+                        </button>
+                      )}
+                      <RemoveRemoteTripButton
+                        tripId={row.id}
+                        disabled={Boolean(imageBusyId) || Boolean(pdfBusy)}
+                        onDone={() => {
+                          if (editingId === row.id) cancelEdit();
+                          loadTrips();
+                        }}
+                        onError={(err) => setError(err.message)}
+                      />
+                    </div>
                   </td>
                   <td className="p-3 text-xs text-slate-400">{row.mcg_status || '—'}</td>
+                  <td className="p-3">
+                    <CreateTripImagesButton
+                      trip={row}
+                      disabled={Boolean(imageBusyId) && imageBusyId !== row.id}
+                      onBusy={(active) => setImageBusyId(active ? row.id : '')}
+                      onDone={loadTrips}
+                    />
+                  </td>
                   <td className="p-3">
                     <button
                       type="button"
@@ -1199,7 +1372,7 @@ export default function RemoteTrips() {
               ))}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="p-6 text-center text-slate-500">
+                  <td colSpan={11} className="p-6 text-center text-slate-500">
                     No remote trips yet.
                   </td>
                 </tr>

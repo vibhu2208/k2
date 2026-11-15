@@ -1,8 +1,13 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client.js';
 import Badge from '../components/Badge.jsx';
-import { fmtDate, fmtKg, listRecentMonths, periodToRange } from '../lib/format.js';
+import { customDateToRange, fmtDate, fmtKg, listRecentMonths, periodToRange } from '../lib/format.js';
+import {
+  parseReportsSearch,
+  reportsTableView,
+  serializeReportsSearch,
+} from '../lib/reportsListState.js';
 
 function SummaryCard({ label, value }) {
   return (
@@ -14,26 +19,74 @@ function SummaryCard({ label, value }) {
 }
 
 export default function Reports() {
-  const [period, setPeriod] = useState('last_7_days');
-  const [ticketStatus, setTicketStatus] = useState('all');
-  const [operator, setOperator] = useState('all');
-  const [material, setMaterial] = useState('all');
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filters = parseReportsSearch(searchParams);
+  const { period, customDate, ticketStatus, operator, material, search, page } = filters;
+  const [searchInput, setSearchInput] = useState(search);
+  const loadSeq = useRef(0);
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({});
   const [pagination, setPagination] = useState({ totalPages: 1, total: 0 });
   const [filterOptions, setFilterOptions] = useState({ operators: [], materials: [] });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const tableView = reportsTableView({ loading, rows });
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [pdfBusy, setPdfBusy] = useState('');
+  const [cancelBusy, setCancelBusy] = useState('');
   const recentMonths = listRecentMonths(4);
+  const listQuery = searchParams.toString();
+  const editSuffix = listQuery ? `?${listQuery}` : '';
+
+  function activeRange() {
+    if (period === 'custom') return customDateToRange(customDate);
+    return periodToRange(period);
+  }
+
+  function updateFilters(patch) {
+    const next = {
+      ...filters,
+      ...patch,
+    };
+    if (patch.period && patch.period !== 'custom') next.customDate = '';
+    setSearchParams(serializeReportsSearch(next), { replace: true });
+  }
+
+  function resetFilters() {
+    setSearchInput('');
+    setSearchParams({}, { replace: true });
+  }
+
+  useEffect(() => {
+    setSearchInput(search);
+  }, [search]);
+
+  useEffect(() => {
+    const next = searchInput.trim();
+    const timer = setTimeout(() => {
+      setSearchParams((current) => {
+        const parsed = parseReportsSearch(current);
+        if (next === parsed.search) return current;
+        return serializeReportsSearch({ ...parsed, search: next, page: 0 });
+      }, { replace: true });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput, setSearchParams]);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     setError('');
+    const range = period === 'custom' ? customDateToRange(customDate) : periodToRange(period);
+    if (period === 'custom' && !range) {
+      if (seq !== loadSeq.current) return;
+      setRows([]);
+      setSummary({});
+      setPagination({ totalPages: 1, total: 0 });
+      setLoading(false);
+      return;
+    }
     try {
-      const range = periodToRange(period);
       const params = {
         ...range,
         page: String(page),
@@ -45,15 +98,17 @@ export default function Reports() {
       if (search.trim()) params.search = search.trim();
 
       const data = await api.getReports(params);
+      if (seq !== loadSeq.current) return;
       setRows(data.rows || []);
       setSummary(data.summary || {});
       setPagination(data.pagination || { totalPages: 1, total: 0 });
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
-  }, [period, ticketStatus, operator, material, search, page]);
+  }, [period, customDate, ticketStatus, operator, material, search, page]);
 
   useEffect(() => {
     api.getReportFilters().then(setFilterOptions).catch(console.error);
@@ -65,19 +120,25 @@ export default function Reports() {
 
   async function exportFile(type) {
     try {
-      const range = periodToRange(period);
+      const range = activeRange();
+      if (period === 'custom' && !range) {
+        alert('Choose a date to download that day’s report.');
+        return;
+      }
       const params = { ...range };
       if (ticketStatus !== 'all') params.ticket_status = ticketStatus;
       if (operator !== 'all') params.operator_name = operator;
       if (material !== 'all') params.material = material;
-      if (search.trim()) params.search = search.trim();
+      const typed = searchInput.trim();
+      if (typed) params.search = typed;
 
       const path = type === 'csv' ? '/reports/export/csv' : '/reports/export/excel';
       const blob = await api.downloadExport(path, params);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = type === 'csv' ? 'weighbridge-report.csv' : 'weighbridge-report.xlsx';
+      const stamp = period === 'custom' && customDate ? `-${customDate}` : '';
+      a.download = type === 'csv' ? `weighbridge-report${stamp}.csv` : `weighbridge-report${stamp}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -103,29 +164,27 @@ export default function Reports() {
       </div>
 
       <div className="card p-4 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-        <SummaryCard label="Total tickets" value={summary.total ?? 0} />
-        <SummaryCard label="Closed" value={summary.closed_count ?? 0} />
-        <SummaryCard label="Open" value={summary.open_count ?? 0} />
-        <SummaryCard label="Total gross" value={fmtKg(summary.total_gross)} />
-        <SummaryCard label="Total tare" value={fmtKg(summary.total_tare)} />
-        <SummaryCard label="Vehicles" value={summary.total_vehicles ?? 0} />
-        <SummaryCard label="Reports PDF" value={summary.reports_generated ?? 0} />
+        <SummaryCard label="Total tickets" value={tableView.summaryPending ? '—' : (summary.total ?? 0)} />
+        <SummaryCard label="Closed" value={tableView.summaryPending ? '—' : (summary.closed_count ?? 0)} />
+        <SummaryCard label="Open" value={tableView.summaryPending ? '—' : (summary.open_count ?? 0)} />
+        <SummaryCard label="Total gross" value={tableView.summaryPending ? '—' : fmtKg(summary.total_gross)} />
+        <SummaryCard label="Total tare" value={tableView.summaryPending ? '—' : fmtKg(summary.total_tare)} />
+        <SummaryCard label="Vehicles" value={tableView.summaryPending ? '—' : (summary.total_vehicles ?? 0)} />
+        <SummaryCard label="Reports PDF" value={tableView.summaryPending ? '—' : (summary.reports_generated ?? 0)} />
       </div>
 
-      <div className="card p-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+      <div className="card p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
         <select
           className="field-input"
           value={period}
-          onChange={(e) => {
-            setPage(0);
-            setPeriod(e.target.value);
-          }}
+          onChange={(e) => updateFilters({ period: e.target.value, page: 0 })}
         >
           <option value="today">Today</option>
           <option value="yesterday">Yesterday</option>
           <option value="last_7_days">Last 7 days</option>
           <option value="this_month">This month</option>
           <option value="last_month">Previous month</option>
+          <option value="custom">Custom date</option>
           <option value="last_4_months">Last 4 months</option>
           <optgroup label="Month wise">
             {recentMonths.map((m) => (
@@ -136,10 +195,7 @@ export default function Reports() {
         <select
           className="field-input"
           value={ticketStatus}
-          onChange={(e) => {
-            setPage(0);
-            setTicketStatus(e.target.value);
-          }}
+          onChange={(e) => updateFilters({ ticketStatus: e.target.value, page: 0 })}
         >
           <option value="all">All statuses</option>
           <option value="CLOSED">Closed</option>
@@ -150,10 +206,7 @@ export default function Reports() {
         <select
           className="field-input"
           value={operator}
-          onChange={(e) => {
-            setPage(0);
-            setOperator(e.target.value);
-          }}
+          onChange={(e) => updateFilters({ operator: e.target.value, page: 0 })}
         >
           <option value="all">All operators</option>
           {filterOptions.operators.map((o) => (
@@ -165,10 +218,7 @@ export default function Reports() {
         <select
           className="field-input"
           value={material}
-          onChange={(e) => {
-            setPage(0);
-            setMaterial(e.target.value);
-          }}
+          onChange={(e) => updateFilters({ material: e.target.value, page: 0 })}
         >
           <option value="all">All materials</option>
           {filterOptions.materials.map((m) => (
@@ -180,14 +230,37 @@ export default function Reports() {
         <input
           className="field-input"
           placeholder="Search slip, truck…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && load()}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return;
+            const next = e.currentTarget.value.trim();
+            updateFilters({ search: next, page: 0 });
+            if (next === search) load();
+          }}
         />
+        {period === 'custom' && (
+          <input
+            type="date"
+            aria-label="Particular date"
+            title="Particular date"
+            className="field-input [color-scheme:dark]"
+            value={customDate}
+            onChange={(e) => updateFilters({ customDate: e.target.value, page: 0 })}
+          />
+        )}
+        <button type="button" className="btn-ghost text-xs self-center whitespace-nowrap" onClick={resetFilters}>
+          Reset Filters
+        </button>
       </div>
 
       {error && <p className="text-sm text-red-400">{error}</p>}
-      {loading && <p className="text-sm text-slate-400">Loading…</p>}
+      {message && <p className="text-sm text-emerald-400">{message}</p>}
+      {loading && (
+        <p className="text-sm text-slate-400" role="status">
+          Loading reports…
+        </p>
+      )}
 
       <div className="card overflow-x-auto">
         <table className="w-full text-sm">
@@ -206,7 +279,7 @@ export default function Reports() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {tableView.showRows && rows.map((row) => (
               <tr key={row.id} className="border-b border-slate-800/60 hover:bg-slate-800/30">
                 <td className="p-3 font-mono text-xs">{row.slip_number}</td>
                 <td className="p-3">{row.truck_number}</td>
@@ -215,10 +288,14 @@ export default function Reports() {
                 <td className="p-3">{fmtKg(row.gross_weight)}</td>
                 <td className="p-3">{fmtKg(row.tare_weight)}</td>
                 <td className="p-3">{fmtKg(row.net_weight)}</td>
-                <td className="p-3 text-xs">
-                  {row.ticket_status === 'OPEN'
-                    ? fmtDate(row.timestamp_in)
-                    : fmtDate(row.timestamp_out || row.timestamp_in)}
+                <td className="p-3 text-xs whitespace-nowrap">
+                  <div>
+                    <span className="text-slate-500">In:</span> {fmtDate(row.timestamp_in)}
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Out:</span>{' '}
+                    {row.ticket_status === 'OPEN' ? '—' : fmtDate(row.timestamp_out)}
+                  </div>
                 </td>
                 <td className="p-3">
                   <Badge
@@ -227,7 +304,9 @@ export default function Reports() {
                         ? 'success'
                         : row.ticket_status === 'OPEN'
                           ? 'warning'
-                          : 'default'
+                          : row.ticket_status === 'CANCELLED'
+                            ? 'danger'
+                            : 'default'
                     }
                   >
                     {row.ticket_status}
@@ -235,11 +314,56 @@ export default function Reports() {
                 </td>
                 <td className="p-3 space-x-2">
                   <Link
-                    to={`/reports/${encodeURIComponent(row.slip_number)}/edit`}
+                    to={`/reports/${encodeURIComponent(row.slip_number)}/edit${editSuffix}`}
                     className="text-brand-400 hover:underline text-xs"
                   >
                     Edit
                   </Link>
+                  {row.ticket_status !== 'DELETED' && (
+                    <button
+                      type="button"
+                      className="text-amber-400 hover:underline text-xs disabled:opacity-50"
+                      disabled={cancelBusy === row.slip_number || pdfBusy === row.slip_number}
+                      onClick={async () => {
+                        const already = row.ticket_status === 'CANCELLED';
+                        if (
+                          !window.confirm(
+                            already
+                              ? `Re-queue cancel for ${row.slip_number} on the weighbridge PC?`
+                              : `Cancel ${row.slip_number}? Sets CANCEL / 0 kg on cloud and the PC.`,
+                          )
+                        ) {
+                          return;
+                        }
+                        if (
+                          !already &&
+                          !window.confirm(`Confirm cancel ${row.slip_number}?`)
+                        ) {
+                          return;
+                        }
+                        setCancelBusy(row.slip_number);
+                        setError('');
+                        setMessage('');
+                        try {
+                          const result = await api.cancelReport(row.slip_number);
+                          setMessage(
+                            `${result.requeued ? 'Cancel re-queued' : 'Cancel queued'} for ${row.slip_number} (command ${result.command?.id?.slice(0, 8)}…)`,
+                          );
+                          await load();
+                        } catch (err) {
+                          setError(err.message);
+                        } finally {
+                          setCancelBusy('');
+                        }
+                      }}
+                    >
+                      {cancelBusy === row.slip_number
+                        ? 'Cancel…'
+                        : row.ticket_status === 'CANCELLED'
+                          ? 'Re-queue cancel'
+                          : 'Cancel'}
+                    </button>
+                  )}
                   {row.ticket_status === 'CLOSED' && (
                     <button
                       type="button"
@@ -249,7 +373,11 @@ export default function Reports() {
                         setPdfBusy(row.slip_number);
                         setError('');
                         try {
-                          await api.downloadReportPdf(row.slip_number);
+                          await api.downloadReportPdf(
+                            row.slip_number,
+                            row.truck_number,
+                            row.timestamp_out || row.timestamp_in,
+                          );
                         } catch (err) {
                           setError(err.message);
                         } finally {
@@ -263,11 +391,19 @@ export default function Reports() {
                 </td>
               </tr>
             ))}
-            {!loading && rows.length === 0 && (
+            {tableView.showSkeleton && (
               <tr>
                 <td colSpan={10} className="p-6 text-center text-slate-500">
-                  No tickets found for this filter. Open or closed tickets sync from the weighbridge
-                  PC — check Sync Status if the list stays empty.
+                  Loading reports…
+                </td>
+              </tr>
+            )}
+            {tableView.showEmpty && (
+              <tr>
+                <td colSpan={10} className="p-6 text-center text-slate-500">
+                  {period === 'custom' && !customDate
+                    ? 'Choose a date to view and download that day’s report.'
+                    : 'No tickets found for this filter. Open or closed tickets sync from the weighbridge PC — check Sync Status if the list stays empty.'}
                 </td>
               </tr>
             )}
@@ -277,14 +413,14 @@ export default function Reports() {
 
       <div className="flex items-center justify-between text-sm">
         <span className="text-slate-400">
-          Page {page + 1} of {pagination.totalPages} ({pagination.total} total)
+          Page {page + 1} of {tableView.summaryPending ? '—' : pagination.totalPages} ({tableView.summaryPending ? '—' : pagination.total} total)
         </span>
         <div className="flex gap-2">
           <button
             type="button"
             className="btn-ghost text-xs"
             disabled={page <= 0}
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            onClick={() => updateFilters({ page: Math.max(0, page - 1) })}
           >
             Previous
           </button>
@@ -292,7 +428,7 @@ export default function Reports() {
             type="button"
             className="btn-ghost text-xs"
             disabled={page + 1 >= pagination.totalPages}
-            onClick={() => setPage((p) => p + 1)}
+            onClick={() => updateFilters({ page: page + 1 })}
           >
             Next
           </button>
