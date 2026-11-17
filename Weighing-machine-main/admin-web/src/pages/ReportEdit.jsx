@@ -194,8 +194,9 @@ export default function ReportEdit() {
         }
       }
 
+      const { destination: _destinationIgnored, ...formWithoutDestination } = form;
       const payload = {
-        ...form,
+        ...formWithoutDestination,
         timestamp_in: form.timestamp_in ? new Date(form.timestamp_in).toISOString() : undefined,
         timestamp_out: form.timestamp_out ? new Date(form.timestamp_out).toISOString() : undefined,
         photoS3Keys,
@@ -405,22 +406,38 @@ export default function ReportEdit() {
         {[
           { key: 'material', label: 'Material', list: lists.materials },
           { key: 'customer_name', label: 'Customer', list: lists.customers },
-          { key: 'destination', label: 'Destination', list: lists.destinations },
+          {
+            key: 'destination',
+            label: 'Destination (weighbridge)',
+            list: lists.destinations,
+            readOnly: true,
+          },
           { key: 'operator_name', label: 'Operator', list: lists.operators },
-        ].map(({ key, label, list }) => (
+        ].map(({ key, label, list, readOnly }) => (
           <div key={key}>
             <label className="text-xs text-slate-400">{label}</label>
             <input
               className="field-input mt-1"
-              list={`${key}-list`}
+              list={readOnly ? undefined : `${key}-list`}
               value={form[key]}
-              onChange={(e) => updateField(key, e.target.value)}
+              readOnly={Boolean(readOnly)}
+              onChange={(e) => {
+                if (readOnly) return;
+                updateField(key, e.target.value);
+              }}
             />
-            <datalist id={`${key}-list`}>
-              {list.map((item) => (
-                <option key={item} value={item} />
-              ))}
-            </datalist>
+            {!readOnly && (
+              <datalist id={`${key}-list`}>
+                {list.map((item) => (
+                  <option key={item} value={item} />
+                ))}
+              </datalist>
+            )}
+            {readOnly ? (
+              <p className="mt-1 text-[11px] text-slate-500">
+                Destination is set on the weighbridge PC and is not changed from admin.
+              </p>
+            ) : null}
           </div>
         ))}
 

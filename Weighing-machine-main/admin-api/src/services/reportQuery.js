@@ -175,7 +175,7 @@ function reportListingTimestamp(row) {
 }
 
 /** Match weighbridge Excel: DD/MM/YYYY and HH:mm:ss local. */
-function formatExportRow(row, companyName = 'DAYA CHARAN & COMPANY') {
+function formatExportRow(row, companyName = 'MKG GREEN ENERGY') {
   const fmtDate = (iso) => {
     if (!iso) return { date: '', time: '' };
     const d = new Date(iso);
@@ -190,7 +190,7 @@ function formatExportRow(row, companyName = 'DAYA CHARAN & COMPANY') {
   const tare = fmtDate(tareWeightTimestamp(row));
   const net = fmtDate(reportListingTimestamp(row));
   const reportCompany =
-    String(companyName || '').trim() || 'DAYA CHARAN & COMPANY';
+    String(companyName || '').trim() || 'MKG GREEN ENERGY';
   return [
     row.slip_number || '',
     row.customer_name || '',

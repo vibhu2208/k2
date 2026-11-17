@@ -27,10 +27,10 @@ async function reportCompanyName() {
   try {
     const settings = await getAdvanceSettings();
     return (
-      String(settings.REPORT_COMPANY_NAME || '').trim() || 'DAYA CHARAN & COMPANY'
+      String(settings.REPORT_COMPANY_NAME || '').trim() || 'MKG GREEN ENERGY'
     );
   } catch {
-    return 'DAYA CHARAN & COMPANY';
+    return 'MKG GREEN ENERGY';
   }
 }
 
@@ -259,7 +259,7 @@ router.post('/:slip/edit', async (req, res) => {
       timestamp_out: body.timestamp_out,
       material: body.material,
       customer_name: body.customer_name,
-      destination: body.destination,
+      // Destination stays weighbridge-owned — do not send/overwrite from admin edit.
       operator_name: body.operator_name,
       photoS3Keys: body.photoS3Keys || [],
     };
@@ -277,7 +277,6 @@ router.post('/:slip/edit', async (req, res) => {
       ['timestamp_out', body.timestamp_out],
       ['material', body.material],
       ['customer_name', body.customer_name],
-      ['destination', body.destination],
       ['operator_name', body.operator_name],
     ];
     for (const [col, value] of fields) {

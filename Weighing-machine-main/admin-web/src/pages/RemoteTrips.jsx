@@ -857,8 +857,8 @@ export default function RemoteTrips() {
           Create a closed trip or an open ticket in the cloud, then use Edit on any Waiting or
           Pending row to change weights, times, vehicle, or masters. Closed trips with a future
           close time wait until that time; past close times and open tickets sync on the next pull.
-          Remote trips are for <span className="text-slate-200 font-medium">DCC only</span> (not MKG
-          or other companies).{' '}
+          Remote trips use company{' '}
+          <span className="text-slate-200 font-medium">MKG GREEN ENERGY</span>.{' '}
           <Link to="/plan-gaps" className="text-brand-300 hover:underline">
             Plan slip gaps
           </Link>{' '}
@@ -916,8 +916,8 @@ export default function RemoteTrips() {
 
         <div className="rounded-md border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm">
           <span className="text-slate-400">Company</span>
-          <span className="ml-2 font-medium text-white">DCC</span>
-          <span className="ml-2 text-xs text-slate-500">(fixed — remote push is DCC only)</span>
+          <span className="ml-2 font-medium text-white">MKG GREEN ENERGY</span>
+          <span className="ml-2 text-xs text-slate-500">(fixed for remote trips)</span>
         </div>
 
         <div>

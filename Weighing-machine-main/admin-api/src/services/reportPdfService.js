@@ -26,14 +26,16 @@ const PHOTO_FIELDS = [
   { col: 'departure_photo_3', pass: 'departure', slot: 3 },
 ];
 
+/** PC slips print "WB - 04"; env/site id may be "WB-04" or "WB04". */
+function formatWeighbridgeId(raw, siteId) {
+  const source = String(raw || siteId || '').trim();
+  const m = source.match(/^([A-Za-z]+)\s*-?\s*(\d+)$/);
+  if (m) return `${m[1].toUpperCase()} - ${m[2].padStart(2, '0')}`;
+  return source || 'WB - 03';
+}
+
 function companySettings() {
   const siteId = getSiteId();
-  // PC settings often use "WB - 03"; SITE_ID is normalized to "WB-03".
-  let displayWb = process.env.WEIGHBRIDGE_ID || '';
-  if (!displayWb) {
-    const m = String(siteId || '').match(/^([A-Za-z]+)(\d+)$/);
-    displayWb = m ? `${m[1]} - ${m[2].padStart(2, '0')}` : siteId || 'WB - 03';
-  }
   return {
     name: process.env.COMPANY_NAME || 'MUNICIPAL CORPORATION GURUGRAM',
     address: process.env.COMPANY_ADDRESS || '',
@@ -41,9 +43,9 @@ function companySettings() {
     siteName:
       process.env.SITE_NAME ||
       process.env.COMPANY_ADDRESS ||
-      'BANDHWARI SLF SITE GURURAM (HARYANA) DCC',
-    weighbridgeId: displayWb,
-    reportCompanyName: process.env.REPORT_COMPANY_NAME || 'DAYA CHARAN & COMPANY',
+      'BANDHWARI SLF SITE GURURAM (HARYANA)',
+    weighbridgeId: formatWeighbridgeId(process.env.WEIGHBRIDGE_ID, siteId),
+    reportCompanyName: process.env.REPORT_COMPANY_NAME || 'MKG GREEN ENERGY',
     logoPath: process.env.REPORT_LOGO_PATH || '',
   };
 }
@@ -161,7 +163,7 @@ async function generateTripPdf(row, options = {}) {
   const html = buildVehicleReportHtml(
     {
       ...row,
-      company: row.company || 'DCC',
+      company: row.company || 'MKG GREEN ENERGY',
       ticket_status: row.ticket_status || 'CLOSED',
       print_at: options.printAt || row.print_at || undefined,
     },

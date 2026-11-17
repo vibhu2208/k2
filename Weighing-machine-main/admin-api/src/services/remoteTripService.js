@@ -930,7 +930,13 @@ async function upsertMirrorFromRemoteTrip(queryFn, row, siteId = getSiteId()) {
       truck_number = EXCLUDED.truck_number,
       rfid_tag = EXCLUDED.rfid_tag,
       customer_name = EXCLUDED.customer_name,
-      destination = EXCLUDED.destination,
+      -- Keep weighbridge destination when mirror already has one (PC is source of truth).
+      destination = CASE
+        WHEN EXCLUDED.ticket_status = 'CANCELLED' THEN EXCLUDED.destination
+        WHEN NULLIF(TRIM(COALESCE(transactions_mirror.destination, '')), '') IS NOT NULL
+          THEN transactions_mirror.destination
+        ELSE EXCLUDED.destination
+      END,
       material = EXCLUDED.material,
       operator_name = EXCLUDED.operator_name,
       transporter = EXCLUDED.transporter,

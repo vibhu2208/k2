@@ -192,12 +192,24 @@ async function performClosedReportUpdate(data = {}) {
     updates.timestamp_out = parsed.toISOString();
   }
 
-  const textFields = ['material', 'customer_name', 'destination', 'operator_name', 'company'];
+  // Destination is owned by the weighbridge PC — admin edits must not overwrite it,
+  // except cancel voids (CANCEL label).
+  const textFields = ['material', 'customer_name', 'operator_name', 'company'];
   for (const key of textFields) {
     if (data[key] != null) {
       const value = String(data[key]).trim();
       if (!value) throw new Error(`${key.replace(/_/g, ' ')} cannot be empty`);
       updates[key] = value;
+    }
+  }
+  if (data.destination != null) {
+    const value = String(data.destination).trim();
+    const cancelling =
+      String(data.cancel || '').toLowerCase() === 'true' ||
+      String(data.ticket_status || '').toUpperCase() === 'CANCELLED' ||
+      value.toUpperCase() === 'CANCEL';
+    if (cancelling && value) {
+      updates.destination = value;
     }
   }
 

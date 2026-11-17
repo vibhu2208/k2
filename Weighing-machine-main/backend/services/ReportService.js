@@ -258,9 +258,9 @@ function getCompanySettings(ticketCompany) {
     name: SettingsService.get('COMPANY_NAME') || process.env.COMPANY_NAME || 'MUNICIPAL CORPORATION GURUGRAM',
     address: SettingsService.get('COMPANY_ADDRESS') || '',
     phone: SettingsService.get('COMPANY_PHONE') || '',
-    siteName: SettingsService.get('SITE_NAME') || SettingsService.get('COMPANY_ADDRESS') || 'BANDHWARI SLF SITE GURURAM (HARYANA) DCC',
+    siteName: SettingsService.get('SITE_NAME') || SettingsService.get('COMPANY_ADDRESS') || 'BANDHWARI SLF SITE GURURAM (HARYANA)',
     weighbridgeId: SettingsService.get('WEIGHBRIDGE_ID') || process.env.WEIGHBRIDGE_ID || 'WB - 03',
-    reportCompanyName: SettingsService.get('REPORT_COMPANY_NAME') || process.env.REPORT_COMPANY_NAME || 'DAYA CHARAN & COMPANY',
+    reportCompanyName: SettingsService.get('REPORT_COMPANY_NAME') || process.env.REPORT_COMPANY_NAME || 'MKG GREEN ENERGY',
     logoPath: SettingsService.get('REPORT_LOGO_PATH') || process.env.REPORT_LOGO_PATH || '',
   };
   return brandCompanyForTicket(base, ticketCompany);
@@ -312,7 +312,7 @@ function rowToExportValues(row, company) {
   const reportCompanyName =
     settings.reportCompanyName ||
     company?.reportCompanyName ||
-    'DAYA CHARAN & COMPANY';
+    'MKG GREEN ENERGY';
   const gross = splitDateTime(grossWeightTimestamp(row));
   const tare = splitDateTime(tareWeightTimestamp(row));
   const net = splitDateTime(reportListingTimestamp(row));

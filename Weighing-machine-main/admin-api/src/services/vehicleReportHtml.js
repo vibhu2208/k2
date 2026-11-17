@@ -39,9 +39,13 @@ function netWeightTimestamp(row) {
   return row.timestamp_out || null;
 }
 
+/**
+ * Match weighbridge reportPdfHtml: Print Date is "now" when generating,
+ * unless the caller passes an explicit print_at (e.g. bulk zip print=gross).
+ */
 function printTimestamp(row) {
   if (row?.print_at) return row.print_at;
-  return grossWeightTimestamp(row) || new Date();
+  return new Date();
 }
 
 function toDisplay(value) {
@@ -69,26 +73,33 @@ function weightLine(label, kg, timestampIso) {
   </div>`;
 }
 
+/** Site heading must not show the old DCC suffix. */
+function stripDccFromSiteName(siteName) {
+  return String(siteName || '')
+    .replace(/\bDCC\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+\)/g, ')')
+    .trim();
+}
+
+const DEFAULT_SITE_NAME = 'BANDHWARI SLF SITE GURURAM (HARYANA)';
+
 function brandCompanyForTicket(company = {}, ticketCompany) {
   const code = String(ticketCompany || '').trim().toUpperCase();
-  if (code !== 'MKG') return company;
-
   const baseSite =
-    company.siteName ||
-    company.address ||
-    'BANDHWARI SLF SITE GURURAM (HARYANA) DCC';
+    company.siteName || company.address || DEFAULT_SITE_NAME;
+  const siteName = stripDccFromSiteName(baseSite) || DEFAULT_SITE_NAME;
 
-  let siteName = String(baseSite);
-  if (/\bDCC\b/i.test(siteName)) {
-    siteName = siteName.replace(/\bDCC\b/gi, 'MKG');
-  } else if (!/\bMKG\b/i.test(siteName)) {
-    siteName = `${siteName.replace(/\s+$/, '')} MKG`;
+  if (!code.includes('MKG')) {
+    if (siteName === String(company.siteName || '').trim()) return company;
+    return { ...company, siteName };
   }
 
   return {
     ...company,
     siteName,
-    reportCompanyName: 'MKG',
+    reportCompanyName:
+      String(ticketCompany || '').trim() || company.reportCompanyName || 'MKG GREEN ENERGY',
   };
 }
 
@@ -235,11 +246,12 @@ function netWeight(row) {
 function buildVehicleReportPage(row, company = {}, photoDataUrls = {}) {
   const branded = brandCompanyForTicket(company, row.company);
   const orgName = branded.name || 'MUNICIPAL CORPORATION GURUGRAM';
-  const siteName = branded.siteName || branded.address || 'BANDHWARI SLF SITE GURURAM (HARYANA) DCC';
+  const siteName =
+    stripDccFromSiteName(branded.siteName || branded.address) || DEFAULT_SITE_NAME;
   const weighbridgeId = branded.weighbridgeId || 'WB - 03';
   const customerName = row.customer_name || '—';
   const destination = row.destination || '—';
-  const companyName = branded.reportCompanyName || 'DAYA CHARAN & COMPANY';
+  const companyName = branded.reportCompanyName || 'MKG GREEN ENERGY';
   const operatorName = row.operator_name || '—';
   const logoHtml = buildReportLogoHtml(branded);
   const arrivalPhotos = buildWeighmentPhotoRow(photoDataUrls.arrival, '1ST WEIGHMENTS');

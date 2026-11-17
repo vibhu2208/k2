@@ -185,7 +185,7 @@ export default function RemoteTripsImport() {
           </Link>
           . Check first, then import — rows that need fixing are skipped and the rest are created
           one by one. Remote trips are for{' '}
-          <span className="text-slate-200 font-medium">DCC only</span>. After import, attach camera
+          <span className="text-slate-200 font-medium">MKG GREEN ENERGY</span>. After import, attach camera
           photos in{' '}
           <Link to="/bulk-photos" className="text-brand-300 hover:underline">
             bulk vehicle photos

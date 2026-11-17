@@ -112,30 +112,37 @@ async function buildWeighmentPhotoRow(row, passLabel, sectionTitle) {
   </div>`;
 }
 
+/** Site heading must not show the old DCC suffix. */
+function stripDccFromSiteName(siteName) {
+  return String(siteName || '')
+    .replace(/\bDCC\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+\)/g, ')')
+    .trim();
+}
+
+const DEFAULT_SITE_NAME = 'BANDHWARI SLF SITE GURURAM (HARYANA)';
+
 /**
  * MKG tickets must not show "DCC" / Daya Charan branding on the slip report.
- * DCC (and unknown) tickets keep the site defaults unchanged.
+ * Accepts "MKG", "MKG GREEN ENERGY", etc. Always strips DCC from the site line.
  */
 function brandCompanyForTicket(company = {}, ticketCompany) {
   const code = String(ticketCompany || '').trim().toUpperCase();
-  if (code !== 'MKG') return company;
+  const baseSite = company.siteName || company.address || DEFAULT_SITE_NAME;
+  const siteName = stripDccFromSiteName(baseSite) || DEFAULT_SITE_NAME;
 
-  const baseSite =
-    company.siteName ||
-    company.address ||
-    'BANDHWARI SLF SITE GURURAM (HARYANA) DCC';
-
-  let siteName = String(baseSite);
-  if (/\bDCC\b/i.test(siteName)) {
-    siteName = siteName.replace(/\bDCC\b/gi, 'MKG');
-  } else if (!/\bMKG\b/i.test(siteName)) {
-    siteName = `${siteName.replace(/\s+$/, '')} MKG`;
+  if (!code.includes('MKG')) {
+    if (siteName === String(company.siteName || '').trim()) return company;
+    return { ...company, siteName };
   }
 
   return {
     ...company,
     siteName,
-    reportCompanyName: 'MKG',
+    // Prefer the full ticket company label when present (e.g. MKG GREEN ENERGY).
+    reportCompanyName:
+      String(ticketCompany || '').trim() || company.reportCompanyName || 'MKG GREEN ENERGY',
   };
 }
 
@@ -151,11 +158,12 @@ function uniqueTicketCompanies(rows = []) {
 async function buildVehicleReportPage(row, company = {}) {
   const branded = brandCompanyForTicket(company, row.company);
   const orgName = branded.name || 'MUNICIPAL CORPORATION GURUGRAM';
-  const siteName = branded.siteName || branded.address || 'BANDHWARI SLF SITE GURURAM (HARYANA) DCC';
+  const siteName =
+    stripDccFromSiteName(branded.siteName || branded.address) || DEFAULT_SITE_NAME;
   const weighbridgeId = branded.weighbridgeId || 'WB - 03';
   const customerName = row.customer_name || '—';
   const destination = row.destination || '—';
-  const companyName = branded.reportCompanyName || 'DAYA CHARAN & COMPANY';
+  const companyName = branded.reportCompanyName || 'MKG GREEN ENERGY';
   const operatorName = row.operator_name || '—';
   const logoHtml = await buildReportLogoHtml(branded);
   const arrivalPhotos = await buildWeighmentPhotoRow(row, 'arrival', '1ST WEIGHMENTS');
@@ -283,7 +291,8 @@ function buildVehicleReportStyles() {
 
 function buildCombinedCoverPage(company = {}, meta = {}) {
   const orgName = company.name || 'MUNICIPAL CORPORATION GURUGRAM';
-  const siteName = company.siteName || company.address || 'BANDHWARI SLF SITE GURURAM (HARYANA) DCC';
+  const siteName =
+    stripDccFromSiteName(company.siteName || company.address) || DEFAULT_SITE_NAME;
   const weighbridgeId = company.weighbridgeId || 'WB - 03';
   const period = meta.periodLabel || meta.period || '—';
   const generated = meta.generatedAt || ts.toDisplay(ts.now());
@@ -595,7 +604,7 @@ function buildDetailedReportHtml(rows, options = {}) {
 <html><head><meta charset="utf-8"/>${buildReportStyles()}</head>
 <body>
   <h1>${escapeHtml(company.name || 'MUNICIPAL CORPORATION GURUGRAM')}</h1>
-  <p class="meta">${escapeHtml(company.siteName || company.address || 'BANDHWARI SLF SITE GURURAM (HARYANA) DCC')}<br/>${escapeHtml(company.weighbridgeId || 'WB - 03')}${company.phone ? `<br/>Tel: ${escapeHtml(company.phone)}` : ''}</p>
+  <p class="meta">${escapeHtml(stripDccFromSiteName(company.siteName || company.address) || DEFAULT_SITE_NAME)}<br/>${escapeHtml(company.weighbridgeId || 'WB - 03')}${company.phone ? `<br/>Tel: ${escapeHtml(company.phone)}` : ''}</p>
   <h2>${escapeHtml(title)}</h2>
   <p class="meta">${escapeHtml(describeFilters(filters))}<br/>Generated ${escapeHtml(ts.toDisplay(ts.now()))}</p>
   ${buildSummaryTable(rows)}

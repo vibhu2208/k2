@@ -18,7 +18,7 @@ const { createCommand } = require('../services/commandService');
 const { generateTripPdf } = require('../services/reportPdfService');
 const { generateRemoteTripPhoto } = require('../services/tripImageService');
 const { grossWeightTimestamp } = require('../services/vehicleReportHtml');
-const { isConfigured, presignGet, getObjectBuffer, mirrorReportKey } = require('../services/s3Presign');
+const { isConfigured, presignGet } = require('../services/s3Presign');
 
 const router = express.Router();
 router.use(authMiddleware);
@@ -83,48 +83,30 @@ router.get('/:id/pdf', async (req, res) => {
 
     const siteId = getSiteId();
     const filename = `${trip.slip_number}_report.pdf`;
+    // Match Reports PDF + weighbridge export: always rebuild so Print Date / layout
+    // match the PC slip. ?print=gross keeps bulk-zip behaviour (print date = gross time).
     const printGross = String(req.query.print || '') === 'gross';
-    let pdf = null;
-
-    if (!printGross) {
-      const existingKeys = [trip.report_s3_key, mirrorReportKey(siteId, trip.slip_number)].filter(
-        Boolean,
+    const built = await generateTripPdf(trip, {
+      siteId,
+      upload: true,
+      printAt: printGross ? grossWeightTimestamp(trip) : undefined,
+    });
+    if (built.report_s3_key) {
+      await query(`UPDATE remote_trips SET report_s3_key = $2 WHERE id = $1`, [
+        trip.id,
+        built.report_s3_key,
+      ]);
+      await query(
+        `UPDATE transactions_mirror
+         SET report_s3_key = $3, updated_at = now()
+         WHERE site_id = $1 AND UPPER(slip_number) = UPPER($2)`,
+        [siteId, trip.slip_number, built.report_s3_key],
       );
-      for (const key of existingKeys) {
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          pdf = await getObjectBuffer(key);
-        } catch {
-          pdf = null;
-        }
-        if (pdf) break;
-      }
-    }
-
-    if (!pdf) {
-      const built = await generateTripPdf(trip, {
-        siteId,
-        upload: true,
-        printAt: printGross ? grossWeightTimestamp(trip) : undefined,
-      });
-      pdf = built.pdf;
-      if (built.report_s3_key) {
-        await query(`UPDATE remote_trips SET report_s3_key = $2 WHERE id = $1`, [
-          trip.id,
-          built.report_s3_key,
-        ]);
-        await query(
-          `UPDATE transactions_mirror
-           SET report_s3_key = $3, updated_at = now()
-           WHERE site_id = $1 AND UPPER(slip_number) = UPPER($2)`,
-          [siteId, trip.slip_number, built.report_s3_key],
-        );
-      }
     }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    return res.send(pdf);
+    return res.send(built.pdf);
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
@@ -181,7 +163,7 @@ router.patch('/:id', async (req, res) => {
           timestamp_out: trip.timestamp_out,
           material: trip.material,
           customer_name: trip.customer_name,
-          destination: trip.destination,
+          // Destination is weighbridge source of truth — never push from admin edit.
           operator_name: trip.operator_name,
           ticket_status: trip.ticket_status,
           vehicle_type: trip.vehicle_type,

@@ -639,8 +639,22 @@ async function processRemoteRow(row, attempt = 0) {
 
   const alreadyImported = TransactionService.getByRemotePgId(remoteId);
   if (alreadyImported) {
+    const desiredCompany = String(row.company || 'MKG GREEN ENERGY').trim() || 'MKG GREEN ENERGY';
+    const currentCompany = String(alreadyImported.company || '').trim();
+    if (currentCompany !== desiredCompany) {
+      try {
+        TransactionService.updateFields(alreadyImported.id, { company: desiredCompany });
+        alreadyImported.company = desiredCompany;
+      } catch (err) {
+        logger.warn('Remote trip company update failed', {
+          slip: alreadyImported.slip_number,
+          message: err.message,
+        });
+      }
+    }
     const photoSync = await syncImportedTripPhotos(row, alreadyImported, {
       regeneratePdf: !isOpenRemoteRow(row),
+      forceRegen: currentCompany !== desiredCompany,
     });
     assertPhotosReady(row, photoSync.localPaths);
     const marked = await markRemoteTripSynced(remoteId, alreadyImported.id, {
@@ -695,7 +709,7 @@ async function processRemoteRow(row, attempt = 0) {
         destination: row.destination,
         material: row.material,
         operator_name: row.operator_name,
-        company: 'DCC',
+        company: row.company || 'MKG GREEN ENERGY',
         vehicle_type: vType,
         gross_weight: row.gross_weight,
         tare_weight: row.tare_weight,
@@ -714,8 +728,8 @@ async function processRemoteRow(row, attempt = 0) {
         destination: row.destination,
         material: row.material,
         operator_name: row.operator_name,
-        // Remote trips are DCC-only — never import as another company
-        company: 'DCC',
+        // Remote trips use MKG GREEN ENERGY on the slip Company_Name line.
+        company: row.company || 'MKG GREEN ENERGY',
         gross_weight: row.gross_weight,
         tare_weight: row.tare_weight,
         timestamp_in: toIso(row.timestamp_in),

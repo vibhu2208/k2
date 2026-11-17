@@ -41,7 +41,7 @@ function getCompanySettings(ticketCompany) {
     name: SettingsService.get('COMPANY_NAME') || process.env.COMPANY_NAME || 'MUNICIPAL CORPORATION GURUGRAM',
     address: SettingsService.get('COMPANY_ADDRESS') || '',
     phone: SettingsService.get('COMPANY_PHONE') || '',
-    siteName: SettingsService.get('SITE_NAME') || 'BANDHWARI SLF SITE GURURAM (HARYANA) DCC',
+    siteName: SettingsService.get('SITE_NAME') || 'BANDHWARI SLF SITE GURURAM (HARYANA)',
     weighbridgeId: SettingsService.get('WEIGHBRIDGE_ID') || process.env.WEIGHBRIDGE_ID || 'WB - 03',
     operator: SettingsService.get('DEFAULT_OPERATOR') || 'Operator',
   };
