@@ -4,8 +4,33 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { query } = require('./db');
 
-const JWT_SECRET = () => process.env.JWT_SECRET || 'change-me-in-production';
-const JWT_EXPIRY = '24h';
+const PLACEHOLDER_SECRET = 'change-me-in-production';
+
+function resolveJwtSecret() {
+  const secret = String(process.env.JWT_SECRET || '').trim();
+  const isProd = process.env.NODE_ENV === 'production';
+  if (!secret || secret === PLACEHOLDER_SECRET) {
+    if (isProd) {
+      throw new Error(
+        'JWT_SECRET must be set to a strong non-default value in production',
+      );
+    }
+    console.warn(
+      '[auth] JWT_SECRET is missing or still the placeholder — set a strong secret before deploying',
+    );
+    return PLACEHOLDER_SECRET;
+  }
+  if (secret.length < 24) {
+    if (isProd) {
+      throw new Error('JWT_SECRET must be at least 24 characters in production');
+    }
+    console.warn('[auth] JWT_SECRET is short; use at least 24 characters');
+  }
+  return secret;
+}
+
+const JWT_SECRET = () => resolveJwtSecret();
+const JWT_EXPIRY = process.env.JWT_EXPIRY || '12h';
 
 async function findUserByEmail(email) {
   const res = await query(
@@ -23,7 +48,7 @@ async function verifyLogin(email, password) {
   const token = jwt.sign(
     { sub: user.id, email: user.email, role: user.role },
     JWT_SECRET(),
-    { expiresIn: JWT_EXPIRY },
+    { expiresIn: JWT_EXPIRY, algorithm: 'HS256' },
   );
   return {
     ok: true,
@@ -39,17 +64,30 @@ function authMiddleware(req, res, next) {
     return res.status(401).json({ ok: false, error: 'Authentication required' });
   }
   try {
-    req.user = jwt.verify(token, JWT_SECRET());
+    req.user = jwt.verify(token, JWT_SECRET(), { algorithms: ['HS256'] });
     return next();
   } catch {
     return res.status(401).json({ ok: false, error: 'Invalid or expired token' });
   }
 }
 
+function requireRole(...roles) {
+  const allowed = roles.map((r) => String(r).toLowerCase());
+  return (req, res, next) => {
+    const role = String(req.user?.role || '').toLowerCase();
+    if (!allowed.length || allowed.includes(role)) return next();
+    return res.status(403).json({ ok: false, error: 'Insufficient permissions' });
+  };
+}
+
 async function bootstrapAdminUser() {
   const email = (process.env.ADMIN_BOOTSTRAP_EMAIL || '').trim().toLowerCase();
   const password = process.env.ADMIN_BOOTSTRAP_PASSWORD || '';
   if (!email || !password) return;
+
+  if (password.length < 10) {
+    console.warn('[auth] ADMIN_BOOTSTRAP_PASSWORD is short; use at least 10 characters');
+  }
 
   const existing = await query('SELECT COUNT(*) AS c FROM admin_users');
   if (Number(existing.rows[0].c) > 0) return;
@@ -65,5 +103,7 @@ async function bootstrapAdminUser() {
 module.exports = {
   verifyLogin,
   authMiddleware,
+  requireRole,
   bootstrapAdminUser,
+  resolveJwtSecret,
 };

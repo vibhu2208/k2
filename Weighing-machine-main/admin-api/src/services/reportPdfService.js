@@ -26,6 +26,20 @@ const PHOTO_FIELDS = [
   { col: 'departure_photo_3', pass: 'departure', slot: 3 },
 ];
 
+const PDF_PHOTO_MAX_WIDTH = Number(process.env.PDF_PHOTO_MAX_WIDTH) || 480;
+const PDF_PHOTO_JPEG_QUALITY = Number(process.env.PDF_PHOTO_JPEG_QUALITY) || 55;
+
+let sharp = null;
+try {
+  sharp = require('sharp');
+} catch {
+  sharp = null;
+}
+
+let sharedBrowser = null;
+let sharedBrowserLaunch = null;
+let pdfQueue = Promise.resolve();
+
 /** PC slips print "WB - 04"; env/site id may be "WB-04" or "WB04". */
 function formatWeighbridgeId(raw, siteId) {
   const source = String(raw || siteId || '').trim();
@@ -56,6 +70,27 @@ function ensureTempDir() {
   return dir;
 }
 
+async function compressPhotoForPdf(buf) {
+  if (!buf || !Buffer.isBuffer(buf)) return buf;
+  if (!sharp) return buf;
+  try {
+    return await sharp(buf, {
+      failOn: 'error',
+      limitInputPixels: Number(process.env.MAX_UPLOAD_INPUT_PIXELS) || 40_000_000,
+    })
+      .rotate()
+      .resize({
+        width: PDF_PHOTO_MAX_WIDTH,
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: PDF_PHOTO_JPEG_QUALITY, mozjpeg: true })
+      .toBuffer();
+  } catch (err) {
+    console.warn('[reportPdf] photo compress failed', err.message);
+    return null;
+  }
+}
+
 async function loadPhotoDataUrls(row) {
   const photos = {
     arrival: [null, null, null],
@@ -72,7 +107,10 @@ async function loadPhotoDataUrls(row) {
       if (!key) return;
       try {
         const buf = await getObjectBuffer(key);
-        const src = bufferToDataUrl(buf, 'image/jpeg');
+        if (!buf) return;
+        const compressed = await compressPhotoForPdf(buf);
+        if (!compressed) return;
+        const src = bufferToDataUrl(compressed, 'image/jpeg');
         if (src) photos[pass][slot - 1] = src;
       } catch (err) {
         console.warn('[reportPdf] photo download failed', col, err.message);
@@ -82,69 +120,104 @@ async function loadPhotoDataUrls(row) {
   return photos;
 }
 
-async function renderHtmlToPdfBuffer(html) {
+async function getSharedBrowser() {
+  if (sharedBrowser && sharedBrowser.connected) return sharedBrowser;
+  if (sharedBrowserLaunch) return sharedBrowserLaunch;
+
   const puppeteer = require('puppeteer');
+  sharedBrowserLaunch = puppeteer
+    .launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
+    })
+    .then((browser) => {
+      sharedBrowser = browser;
+      sharedBrowserLaunch = null;
+      browser.on('disconnected', () => {
+        sharedBrowser = null;
+      });
+      return browser;
+    })
+    .catch((err) => {
+      sharedBrowserLaunch = null;
+      throw err;
+    });
+
+  return sharedBrowserLaunch;
+}
+
+async function renderHtmlToPdfBuffer(html) {
   const tempDir = ensureTempDir();
   const tempHtml = path.join(
     tempDir,
-    `render_${Date.now()}_${process.pid}.html`,
+    `render_${Date.now()}_${process.pid}_${Math.random().toString(36).slice(2, 8)}.html`,
   );
   fs.writeFileSync(tempHtml, html, 'utf8');
 
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    });
+  const run = async () => {
+    const browser = await getSharedBrowser();
     const page = await browser.newPage();
-    // file:// + data: images — match Electron loadFile + printToPDF flow
-    await page.goto(`file://${tempHtml}`, {
-      waitUntil: 'networkidle0',
-      timeout: 60000,
-    });
-    await page.evaluate(async () => {
-      const imgs = Array.from(document.images || []);
-      await Promise.all(
-        imgs.map(
-          (img) =>
-            new Promise((resolve) => {
-              const finish = () => {
-                if (img.naturalWidth === 0) {
-                  img.style.display = 'none';
-                  const parent = img.closest('.photo-cell');
-                  if (parent) parent.classList.add('empty');
+    try {
+      await page.goto(`file://${tempHtml}`, {
+        waitUntil: 'networkidle0',
+        timeout: 60000,
+      });
+      await page.evaluate(async () => {
+        const imgs = Array.from(document.images || []);
+        await Promise.all(
+          imgs.map(
+            (img) =>
+              new Promise((resolve) => {
+                const finish = () => {
+                  if (img.naturalWidth === 0) {
+                    img.style.display = 'none';
+                    const parent = img.closest('.photo-cell');
+                    if (parent) parent.classList.add('empty');
+                  }
+                  resolve();
+                };
+                if (img.complete) finish();
+                else {
+                  img.addEventListener('load', finish, { once: true });
+                  img.addEventListener('error', finish, { once: true });
                 }
-                resolve();
-              };
-              if (img.complete) finish();
-              else {
-                img.addEventListener('load', finish, { once: true });
-                img.addEventListener('error', finish, { once: true });
-              }
-            }),
-        ),
-      );
-    });
-    await new Promise((r) => setTimeout(r, 300));
+              }),
+          ),
+        );
+      });
+      await new Promise((r) => setTimeout(r, 150));
 
-    // Same paper size as backend/utils/htmlToPdf.js (Electron printToPDF).
-    const pdf = await page.pdf({
-      printBackground: true,
-      width: '8.27in',
-      height: '11.69in',
-      margin: { top: '0', right: '0', bottom: '0', left: '0' },
-      preferCSSPageSize: true,
-    });
-    return Buffer.from(pdf);
-  } finally {
-    if (browser) {
+      const pdf = await page.pdf({
+        printBackground: true,
+        width: '8.27in',
+        height: '11.69in',
+        margin: { top: '0', right: '0', bottom: '0', left: '0' },
+        preferCSSPageSize: true,
+      });
+      return Buffer.from(pdf);
+    } finally {
       try {
-        await browser.close();
+        await page.close();
       } catch {
         /* ignore */
       }
     }
+  };
+
+  try {
+    // Serialize PDF jobs on the shared Chromium to avoid OOM.
+    const resultPromise = pdfQueue.then(run, run);
+    pdfQueue = resultPromise.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await resultPromise;
+  } finally {
     try {
       fs.unlinkSync(tempHtml);
     } catch {

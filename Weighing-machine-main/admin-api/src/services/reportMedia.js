@@ -81,35 +81,38 @@ async function hydratePhotoKeys(row) {
   return out;
 }
 
-async function attachMediaUrls(row) {
-  const hydrated = await hydratePhotoKeys(row);
+async function attachMediaUrls(row, options = {}) {
+  // List callers should skip hydrate (S3 Head/List). Detail/PDF keep full resolve.
+  const hydrated =
+    options.hydrate === false ? { ...row } : await hydratePhotoKeys(row);
   if (!hydrated || !isConfigured()) return hydrated;
   const out = { ...hydrated };
+  const tasks = [];
   for (const field of PHOTO_FIELDS) {
     const key = out[field];
     if (!key) continue;
-    try {
-      if (!(await objectExists(key))) {
-        out[field] = null;
-        out[`${field}_url`] = null;
-        continue;
-      }
-      out[`${field}_url`] = await presignGet(key);
-    } catch {
-      out[`${field}_url`] = null;
-    }
+    tasks.push(
+      presignGet(key)
+        .then((url) => {
+          out[`${field}_url`] = url;
+        })
+        .catch(() => {
+          out[`${field}_url`] = null;
+        }),
+    );
   }
   if (out.report_s3_key) {
-    try {
-      if (await objectExists(out.report_s3_key)) {
-        out.report_url = await presignGet(out.report_s3_key);
-      } else {
-        out.report_url = null;
-      }
-    } catch {
-      out.report_url = null;
-    }
+    tasks.push(
+      presignGet(out.report_s3_key)
+        .then((url) => {
+          out.report_url = url;
+        })
+        .catch(() => {
+          out.report_url = null;
+        }),
+    );
   }
+  if (tasks.length) await Promise.all(tasks);
   return out;
 }
 

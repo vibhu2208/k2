@@ -540,7 +540,8 @@ export default function BulkPhotoUpload() {
       const folder = zip.folder(folderName);
       const failed = [];
       const filenameCounts = new Map();
-      await mapPool(zipTrips, 1, async (row) => {
+      // Shared Chromium pool on the API allows modest concurrency safely.
+      await mapPool(zipTrips, 2, async (row) => {
         setProgress((p) => ({
           done: p?.done || 0,
           total: zipTrips.length,

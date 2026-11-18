@@ -3,7 +3,8 @@
 const express = require('express');
 const ExcelJS = require('exceljs');
 const { query, getSiteId } = require('../db');
-const { authMiddleware } = require('../auth');
+const { authMiddleware, requireRole } = require('../auth');
+const { sendError } = require('../security/httpErrors');
 const {
   queryPaginated,
   summarise,
@@ -22,6 +23,16 @@ const {
   hydratePhotoKeys,
 } = require('../services/reportMedia');
 const { getAdvanceSettings } = require('../services/settingsService');
+const { assertPhotoKeyForSlip } = require('../security/s3Keys');
+const rateLimit = require('express-rate-limit');
+
+const pdfLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.PDF_RATE_LIMIT_PER_MIN) || 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many PDF requests — slow down' },
+});
 
 async function reportCompanyName() {
   try {
@@ -45,13 +56,10 @@ function styleWeighbridgeHeader(ws) {
   headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
   headerRow.height = 22;
   ws.views = [{ state: 'frozen', ySplit: 1 }];
-  ws.columns.forEach((column) => {
-    let maxLength = 10;
-    column.eachCell({ includeEmpty: true }, (cell) => {
-      const len = cell.value ? String(cell.value).length : 0;
-      if (len > maxLength) maxLength = len;
-    });
-    column.width = Math.min(maxLength + 2, 40);
+  // Fixed widths — scanning every cell on large exports is O(rows×cols).
+  const widths = [14, 16, 18, 18, 14, 14, 14, 12, 12, 12, 20, 20, 14, 14, 18];
+  ws.columns.forEach((column, i) => {
+    column.width = widths[i] || 16;
   });
 }
 
@@ -61,19 +69,21 @@ router.use(authMiddleware);
 router.get('/', async (req, res) => {
   try {
     const siteId = getSiteId();
-    try {
-      const { reassertVehicleFromAppliedEdits } = require('../services/commandService');
-      await reassertVehicleFromAppliedEdits({ hours: 72, limit: 80 });
-    } catch (_e) {
-      /* optional */
-    }
     const filters = req.query || {};
-    const result = await queryPaginated(query, siteId, filters);
-    const summary = await summarise(query, siteId, filters);
-    const rows = await Promise.all(result.rows.map(attachMediaUrls));
+    // List UI does not need presigned URLs; skip S3 Head/List/Presign per row.
+    // Pass media=1 when thumbnails are required. Vehicle reassert runs on its worker.
+    const wantMedia =
+      filters.media === '1' || filters.media === 'true' || filters.media === true;
+    const [result, summary] = await Promise.all([
+      queryPaginated(query, siteId, filters),
+      summarise(query, siteId, filters),
+    ]);
+    const rows = wantMedia
+      ? await Promise.all(result.rows.map(attachMediaUrls))
+      : result.rows;
     return res.json({ ok: true, rows, pagination: result.pagination, summary });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return sendError(res, err);
   }
 });
 
@@ -82,7 +92,7 @@ router.get('/filters', async (_req, res) => {
     const options = await getFilterOptions(query, getSiteId());
     return res.json({ ok: true, ...options });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return sendError(res, err);
   }
 });
 
@@ -175,7 +185,7 @@ router.get('/:slip', async (req, res) => {
  * downloads always include images — even when the PC uploaded an empty PDF.
  * Uses the same row + photo hydration as the edit view so images match.
  */
-router.get('/:slip/pdf', async (req, res) => {
+router.get('/:slip/pdf', pdfLimiter, async (req, res) => {
   try {
     const siteId = getSiteId();
     const aliases = siteIdAliases(siteId);
@@ -223,7 +233,7 @@ router.get('/:slip/pdf', async (req, res) => {
     );
     return res.send(built.pdf);
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return sendError(res, err);
   }
 });
 
@@ -305,8 +315,9 @@ router.post('/:slip/edit', async (req, res) => {
       const key = item.key || item.s3Key;
       const pass = item.pass === 'arrival' ? 'arrival' : 'departure';
       if (!key || !Number.isFinite(slot) || slot < 1 || slot > 3) continue;
+      const safeKey = assertPhotoKeyForSlip(key, newSlipNumber || slip, siteId);
       sets.push(`${pass}_photo_${slot} = $${idx++}`);
-      params.push(key);
+      params.push(safeKey);
     }
     if (sets.length) {
       sets.push('updated_at = now()');
@@ -360,7 +371,7 @@ router.post('/:slip/edit', async (req, res) => {
   }
 });
 
-router.post('/:slip/delete', async (req, res) => {
+router.post('/:slip/delete', requireRole('admin'), async (req, res) => {
   try {
     const slip = String(req.params.slip || '').trim();
     const cmd = await createCommand({
@@ -374,7 +385,7 @@ router.post('/:slip/delete', async (req, res) => {
   }
 });
 
-router.post('/:slip/cancel', async (req, res) => {
+router.post('/:slip/cancel', requireRole('admin'), async (req, res) => {
   try {
     const slip = String(req.params.slip || '').trim();
     if (!slip) return res.status(400).json({ ok: false, error: 'Slip is required' });

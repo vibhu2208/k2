@@ -27,13 +27,22 @@ function getPool() {
     throw new Error('DATABASE_URL is not configured');
   }
   if (!pool) {
+    const isProd = process.env.NODE_ENV === 'production';
+    const rejectUnauthorized =
+      String(process.env.DB_SSL_REJECT_UNAUTHORIZED || (isProd ? 'true' : 'false'))
+        .toLowerCase() === 'true';
     pool = new Pool({
       connectionString: stripSslModeFromUrl(getConnectionString()),
-      ssl: { rejectUnauthorized: false },
+      ssl: { rejectUnauthorized },
       max: 8,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 15000,
     });
+    if (isProd && !rejectUnauthorized) {
+      console.warn(
+        '[db] DB_SSL_REJECT_UNAUTHORIZED=false — TLS certificate verification is disabled',
+      );
+    }
     pool.on('error', (err) => {
       console.error('[db] pool error', err.message);
     });

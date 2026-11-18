@@ -155,16 +155,6 @@ export const api = {
     });
   },
 
-  exportCsvUrl(params = {}) {
-    const qs = new URLSearchParams(params).toString();
-    return `${API_URL}/reports/export/csv?${qs}`;
-  },
-
-  exportExcelUrl(params = {}) {
-    const qs = new URLSearchParams(params).toString();
-    return `${API_URL}/reports/export/excel?${qs}`;
-  },
-
   async downloadExport(path, params = {}) {
     const qs = new URLSearchParams(params).toString();
     const token = getToken();

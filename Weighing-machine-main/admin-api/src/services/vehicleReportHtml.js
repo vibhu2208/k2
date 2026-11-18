@@ -6,6 +6,7 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 function escapeHtml(value) {
@@ -112,10 +113,20 @@ function mimeForPath(filePath) {
 }
 
 function fileToDataUrl(filePath) {
-  if (!filePath || !fs.existsSync(filePath)) return null;
+  if (!filePath) return null;
   try {
-    const data = fs.readFileSync(filePath).toString('base64');
-    return `data:${mimeForPath(filePath)};base64,${data}`;
+    const resolved = path.resolve(filePath);
+    const allowedRoots = [
+      path.resolve(process.cwd()),
+      path.resolve(__dirname, '../../..'),
+      path.resolve(os.tmpdir()),
+    ];
+    const allowed = allowedRoots.some(
+      (root) => resolved === root || resolved.startsWith(root + path.sep),
+    );
+    if (!allowed || !fs.existsSync(resolved)) return null;
+    const data = fs.readFileSync(resolved).toString('base64');
+    return `data:${mimeForPath(resolved)};base64,${data}`;
   } catch {
     return null;
   }

@@ -2,7 +2,17 @@
 
 const express = require('express');
 const { query, getSiteId } = require('../db');
-const { authMiddleware } = require('../auth');
+const { authMiddleware, requireRole } = require('../auth');
+const { sendError } = require('../security/httpErrors');
+const rateLimit = require('express-rate-limit');
+
+const pdfLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.PDF_RATE_LIMIT_PER_MIN) || 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many PDF requests — slow down' },
+});
 const {
   createRemoteTrip,
   updateRemoteTrip,
@@ -68,15 +78,32 @@ async function attachTripMedia(row) {
 
 router.get('/', async (req, res) => {
   try {
-    const rows = await listRemoteTrips(query, req.query || {});
-    const withMedia = await Promise.all(rows.map(attachTripMedia));
+    const filters = req.query || {};
+    const rows = await listRemoteTrips(query, filters);
+    // Presign is local/cheap; keep by default for bulk-photo thumbs.
+    // Pass media=0 to skip when only keys/metadata are needed.
+    const skipMedia =
+      filters.media === '0' || filters.media === 'false' || filters.media === false;
+    const withMedia = skipMedia
+      ? rows.map((row) => ({
+          ...row,
+          has_photos: [
+            'arrival_photo_1',
+            'arrival_photo_2',
+            'arrival_photo_3',
+            'departure_photo_1',
+            'departure_photo_2',
+            'departure_photo_3',
+          ].some((c) => Boolean(row[c])),
+        }))
+      : await Promise.all(rows.map(attachTripMedia));
     return res.json({ ok: true, rows: withMedia });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-router.get('/:id/pdf', async (req, res) => {
+router.get('/:id/pdf', pdfLimiter, async (req, res) => {
   try {
     const trip = await getRemoteTrip(query, req.params.id);
     if (!trip) return res.status(404).json({ ok: false, error: 'Not found' });
@@ -108,7 +135,7 @@ router.get('/:id/pdf', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(built.pdf);
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return sendError(res, err);
   }
 });
 
@@ -122,7 +149,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-router.post('/bulk', async (req, res) => {
+router.post('/bulk', requireRole('admin'), async (req, res) => {
   try {
     const body = req.body || {};
     const trips = Array.isArray(body) ? body : body.trips;
@@ -185,7 +212,7 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-router.post('/:id/generate-photo', async (req, res) => {
+router.post('/:id/generate-photo', requireRole('admin'), async (req, res) => {
   try {
     const result = await generateRemoteTripPhoto(query, req.params.id, req.body || {});
     return res.json({
@@ -220,7 +247,7 @@ router.post('/:id/resync', async (req, res) => {
   }
 });
 
-router.post('/:id/cancel', async (req, res) => {
+router.post('/:id/cancel', requireRole('admin'), async (req, res) => {
   try {
     const result = await cancelRemoteTrip(query, req.params.id, {
       allowAlreadyCancelled: true,
@@ -263,7 +290,7 @@ router.post('/:id/cancel', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireRole('admin'), async (req, res) => {
   try {
     const result = await deleteRemoteTrip(query, req.params.id);
     let localDeleteQueued = false;

@@ -768,15 +768,15 @@ export default function RemoteTrips() {
       // When slip is known up front, upload photos BEFORE create/update so the PC
       // import already has S3 keys.
       if (chosenSlip) {
+        const jobs = [];
         for (const { pass } of photoPasses) {
           for (const slot of PHOTO_SLOTS) {
             const file = photos[photoKey(pass, slot)];
             if (!file) continue;
-            // eslint-disable-next-line no-await-in-loop
-            const uploaded = await uploadPhoto(chosenSlip, pass, slot, file);
-            photoS3Keys.push(uploaded);
+            jobs.push(uploadPhoto(chosenSlip, pass, slot, file));
           }
         }
+        photoS3Keys.push(...(await Promise.all(jobs)));
       }
 
       const payload = {
@@ -807,15 +807,15 @@ export default function RemoteTrips() {
 
         // Auto-assigned slip: upload+attach after create (re-queues PC if it synced early).
         if (!chosenSlip) {
+          const jobs = [];
           for (const { pass } of photoPasses) {
             for (const slot of PHOTO_SLOTS) {
               const file = photos[photoKey(pass, slot)];
               if (!file) continue;
-              // eslint-disable-next-line no-await-in-loop
-              const uploaded = await uploadPhoto(trip.slip_number, pass, slot, file);
-              photoS3Keys.push(uploaded);
+              jobs.push(uploadPhoto(trip.slip_number, pass, slot, file));
             }
           }
+          photoS3Keys.push(...(await Promise.all(jobs)));
           if (photoS3Keys.length) {
             await api.attachRemoteTripPhotos(trip.id, photoS3Keys);
           }

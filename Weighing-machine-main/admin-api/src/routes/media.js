@@ -12,31 +12,33 @@ const {
   fillVehicleStillKey,
   isConfigured,
 } = require('../services/s3Presign');
+const { assertValidSlip, assertAllowedObjectKey } = require('../security/s3Keys');
+const { parseImageBuffer } = require('../security/imageUpload');
+const { sendError } = require('../security/httpErrors');
 
 const PLATE_RE = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$/;
+const ALLOWED_UPLOAD_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 const router = express.Router();
 router.use(authMiddleware);
 
-function parseImageBuffer(imageBase64) {
-  if (!imageBase64 || typeof imageBase64 !== 'string') {
-    throw new Error('imageBase64 is required');
+function resolveUploadContentType(contentType) {
+  const ct = String(contentType || 'image/jpeg').toLowerCase().split(';')[0].trim();
+  if (!ALLOWED_UPLOAD_TYPES.has(ct)) {
+    throw Object.assign(new Error('contentType must be image/jpeg, image/png, or image/webp'), {
+      status: 400,
+    });
   }
-  const match = imageBase64.match(/^data:image\/[\w+.-]+;base64,(.+)$/);
-  const raw = match ? match[1] : imageBase64;
-  const buf = Buffer.from(raw, 'base64');
-  if (!buf.length) throw new Error('Invalid image data');
-  return buf;
+  return ct;
 }
 
 router.get('/presign', async (req, res) => {
   try {
-    const key = String(req.query.key || '').trim();
-    if (!key) return res.status(400).json({ ok: false, error: 'key required' });
+    const key = assertAllowedObjectKey(String(req.query.key || '').trim());
     const url = await presignGet(key);
     return res.json({ ok: true, url, key });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return sendError(res, err, 400);
   }
 });
 
@@ -46,18 +48,19 @@ router.post('/upload-url', async (req, res) => {
       return res.status(503).json({ ok: false, error: 'S3 not configured' });
     }
     const siteId = getSiteId();
-    const { slip, slot, contentType, pass } = req.body || {};
-    const slipNum = String(slip || '').trim();
+    const { slot, pass } = req.body || {};
+    const slipNum = assertValidSlip(req.body?.slip);
     const slotNum = Number(slot);
     const photoPass = pass === 'arrival' ? 'arrival' : 'departure';
-    if (!slipNum || !Number.isFinite(slotNum) || slotNum < 1 || slotNum > 3) {
+    if (!Number.isFinite(slotNum) || slotNum < 1 || slotNum > 3) {
       return res.status(400).json({ ok: false, error: 'slip and slot (1-3) required' });
     }
+    const contentType = resolveUploadContentType(req.body?.contentType);
     const key = mirrorPhotoKey(siteId, slipNum, slotNum, photoPass);
-    const url = await presignPut(key, contentType || 'image/jpeg');
-    return res.json({ ok: true, uploadUrl: url, key });
+    const url = await presignPut(key, contentType);
+    return res.json({ ok: true, uploadUrl: url, key, contentType });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return sendError(res, err, 400);
   }
 });
 
@@ -66,18 +69,19 @@ router.post('/remote-trip-upload-url', async (req, res) => {
     if (!isConfigured()) {
       return res.status(503).json({ ok: false, error: 'S3 not configured' });
     }
-    const { slip, slot, contentType, pass } = req.body || {};
-    const slipNum = String(slip || '').trim();
+    const { slot, pass } = req.body || {};
+    const slipNum = assertValidSlip(req.body?.slip);
     const slotNum = Number(slot);
     const photoPass = pass === 'arrival' ? 'arrival' : 'departure';
-    if (!slipNum || !Number.isFinite(slotNum) || slotNum < 1 || slotNum > 3) {
+    if (!Number.isFinite(slotNum) || slotNum < 1 || slotNum > 3) {
       return res.status(400).json({ ok: false, error: 'slip and slot (1-3) required' });
     }
+    const contentType = resolveUploadContentType(req.body?.contentType);
     const key = remoteTripPhotoKey(slipNum, slotNum, photoPass);
-    const url = await presignPut(key, contentType || 'image/jpeg');
-    return res.json({ ok: true, uploadUrl: url, key });
+    const url = await presignPut(key, contentType);
+    return res.json({ ok: true, uploadUrl: url, key, contentType });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return sendError(res, err, 400);
   }
 });
 
@@ -87,19 +91,19 @@ router.post('/remote-trip-upload', async (req, res) => {
     if (!isConfigured()) {
       return res.status(503).json({ ok: false, error: 'S3 not configured' });
     }
-    const { slip, slot, contentType, pass, imageBase64 } = req.body || {};
-    const slipNum = String(slip || '').trim();
+    const { slot, pass, imageBase64 } = req.body || {};
+    const slipNum = assertValidSlip(req.body?.slip);
     const slotNum = Number(slot);
     const photoPass = pass === 'arrival' ? 'arrival' : 'departure';
-    if (!slipNum || !Number.isFinite(slotNum) || slotNum < 1 || slotNum > 3) {
+    if (!Number.isFinite(slotNum) || slotNum < 1 || slotNum > 3) {
       return res.status(400).json({ ok: false, error: 'slip and slot (1-3) required' });
     }
     const key = remoteTripPhotoKey(slipNum, slotNum, photoPass);
-    const body = parseImageBuffer(imageBase64);
-    await putObject(key, body, contentType || 'image/jpeg');
+    const { buffer, contentType } = await parseImageBuffer(imageBase64);
+    await putObject(key, buffer, contentType);
     return res.json({ ok: true, key, slot: slotNum, pass: photoPass });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return sendError(res, err, 400);
   }
 });
 
@@ -109,7 +113,7 @@ router.post('/fill-vehicle-still', async (req, res) => {
     if (!isConfigured()) {
       return res.status(503).json({ ok: false, error: 'S3 not configured' });
     }
-    const { plate, slot, contentType, pass, imageBase64 } = req.body || {};
+    const { plate, slot, pass, imageBase64 } = req.body || {};
     const truck = String(plate || '')
       .toUpperCase()
       .replace(/[\s-]/g, '');
@@ -122,12 +126,12 @@ router.post('/fill-vehicle-still', async (req, res) => {
       });
     }
     const key = fillVehicleStillKey(truck, photoPass, slotNum);
-    const body = parseImageBuffer(imageBase64);
-    await putObject(key, body, contentType || 'image/jpeg');
+    const { buffer, contentType } = await parseImageBuffer(imageBase64);
+    await putObject(key, buffer, contentType);
     const url = await presignGet(key);
     return res.json({ ok: true, key, url, slot: slotNum, pass: photoPass });
   } catch (err) {
-    return res.status(400).json({ ok: false, error: err.message });
+    return sendError(res, err, 400);
   }
 });
 
@@ -138,19 +142,19 @@ router.post('/upload', async (req, res) => {
       return res.status(503).json({ ok: false, error: 'S3 not configured' });
     }
     const siteId = getSiteId();
-    const { slip, slot, contentType, pass, imageBase64 } = req.body || {};
-    const slipNum = String(slip || '').trim();
+    const { slot, pass, imageBase64 } = req.body || {};
+    const slipNum = assertValidSlip(req.body?.slip);
     const slotNum = Number(slot);
     const photoPass = pass === 'arrival' ? 'arrival' : 'departure';
-    if (!slipNum || !Number.isFinite(slotNum) || slotNum < 1 || slotNum > 3) {
+    if (!Number.isFinite(slotNum) || slotNum < 1 || slotNum > 3) {
       return res.status(400).json({ ok: false, error: 'slip and slot (1-3) required' });
     }
     const key = mirrorPhotoKey(siteId, slipNum, slotNum, photoPass);
-    const body = parseImageBuffer(imageBase64);
-    await putObject(key, body, contentType || 'image/jpeg');
+    const { buffer, contentType } = await parseImageBuffer(imageBase64);
+    await putObject(key, buffer, contentType);
     return res.json({ ok: true, key, slot: slotNum, pass: photoPass });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return sendError(res, err, 400);
   }
 });
 

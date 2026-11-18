@@ -685,10 +685,12 @@ async function createRemoteTrip(queryFn, body = {}, options = {}) {
   }
 
   if (data.slip_number) {
-    // Refresh all synced remote_trips from local mirror before claiming this slip.
+    // Slip-scoped refresh only — never full-table reconcile on the create hot path.
     if (!options.skipReconcile) {
       try {
-        await reconcileRemoteTripsFromMirror(queryFn);
+        await reconcileRemoteTripsFromMirror(queryFn, getSiteId(), {
+          slips: [data.slip_number],
+        });
       } catch (err) {
         console.warn('[remoteTrip] pre-create reconcile from mirror failed', err.message);
       }
@@ -858,7 +860,9 @@ async function importRemoteTrips(queryFn, trips, { dryRun = false } = {}) {
   if (!dryRun) {
     if (explicitSlips.length) {
       try {
-        await reconcileRemoteTripsFromMirror(queryFn);
+        await reconcileRemoteTripsFromMirror(queryFn, getSiteId(), {
+          slips: explicitSlips,
+        });
       } catch (err) {
         console.warn('[remoteTrip] bulk pre-import reconcile from mirror failed', err.message);
       }
@@ -1022,15 +1026,43 @@ async function reconcileRemoteTripsToMirror(queryFn, siteId = getSiteId(), limit
 }
 
 /**
- * Refresh ALL synced remote_trips from transactions_mirror (local truth).
+ * Refresh synced remote_trips from transactions_mirror (local truth).
  * Moves remapped slips, copies weights/times/truck/etc, drops stale rows.
+ * Options:
+ *   - slips: only these slip numbers
+ *   - limit: max rows per pass (worker uses a batch to avoid full-table storms)
  */
-async function reconcileRemoteTripsFromMirror(queryFn, siteId = getSiteId()) {
-  const remotes = await queryFn(
-    `SELECT * FROM remote_trips
-     WHERE synced_to_local = true
-     ORDER BY created_at DESC`,
+async function reconcileRemoteTripsFromMirror(
+  queryFn,
+  siteId = getSiteId(),
+  options = {},
+) {
+  const limit = Math.max(
+    1,
+    Math.min(Number(options.limit) || (options.slips ? 500 : 80), 500),
   );
+  const slips = Array.isArray(options.slips)
+    ? options.slips.map((s) => String(s || '').trim().toUpperCase()).filter(Boolean)
+    : null;
+
+  let remotes;
+  if (slips && slips.length) {
+    remotes = await queryFn(
+      `SELECT * FROM remote_trips
+       WHERE synced_to_local = true AND UPPER(slip_number) = ANY($1::text[])
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [slips, limit],
+    );
+  } else {
+    remotes = await queryFn(
+      `SELECT * FROM remote_trips
+       WHERE synced_to_local = true
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+  }
 
   let updated = 0;
   let deleted = 0;
@@ -1187,9 +1219,9 @@ function isDbConnectivityError(err) {
   );
 }
 
-function startMirrorReconcileWorker(queryFn, everySec = 60) {
+function startMirrorReconcileWorker(queryFn, everySec = 120) {
   if (reconcileTimer) return;
-  const baseMs = Math.max(15, everySec) * 1000;
+  const baseMs = Math.max(30, everySec) * 1000;
   let failStreak = 0;
   let nextAllowedAt = 0;
   let lastWarnAt = 0;
@@ -1198,8 +1230,10 @@ function startMirrorReconcileWorker(queryFn, everySec = 60) {
     const now = Date.now();
     if (now < nextAllowedAt) return;
     try {
-      const fromLocal = await reconcileRemoteTripsFromMirror(queryFn);
-      if (fromLocal.updated || fromLocal.deleted) {
+      const fromLocal = await reconcileRemoteTripsFromMirror(queryFn, getSiteId(), {
+        limit: 80,
+      });
+      if (fromLocal.updated || fromLocal.deleted || fromLocal.errors) {
         console.log('[remoteTrip] reconciled remote_trips from local mirror', fromLocal);
       }
       const result = await reconcileRemoteTripsToMirror(queryFn);
@@ -1298,13 +1332,14 @@ async function attachPhotos(queryFn, id, photoS3Keys = []) {
   const row = await getRemoteTrip(queryFn, id);
   if (!row) throw new Error('Remote trip not found');
 
+  const { assertPhotoKeyForSlip } = require('../security/s3Keys');
   const updates = {};
   for (const item of photoS3Keys) {
     const slot = Number(item.slot);
     const key = item.key || item.s3Key;
     const pass = item.pass === 'arrival' ? 'arrival' : 'departure';
     if (!key || !Number.isFinite(slot) || slot < 1 || slot > 3) continue;
-    updates[`${pass}_photo_${slot}`] = key;
+    updates[`${pass}_photo_${slot}`] = assertPhotoKeyForSlip(key, row.slip_number);
   }
 
   if (!Object.keys(updates).length) {

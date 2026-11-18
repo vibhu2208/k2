@@ -183,16 +183,14 @@ export default function ReportEdit() {
     setError('');
     setMessage('');
     try {
-      const photoS3Keys = [];
+      const uploadJobs = [];
       for (const { pass } of PHOTO_PASSES) {
         for (const slot of PHOTO_SLOTS) {
           const file = photos[photoKey(pass, slot)];
-          if (file) {
-            const uploaded = await uploadPhoto(pass, slot, file);
-            if (uploaded) photoS3Keys.push(uploaded);
-          }
+          if (file) uploadJobs.push(uploadPhoto(pass, slot, file));
         }
       }
+      const photoS3Keys = (await Promise.all(uploadJobs)).filter(Boolean);
 
       const { destination: _destinationIgnored, ...formWithoutDestination } = form;
       const payload = {

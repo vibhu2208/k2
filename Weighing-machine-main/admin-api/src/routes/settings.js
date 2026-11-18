@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { authMiddleware } = require('../auth');
+const { authMiddleware, requireRole } = require('../auth');
 const {
   getAdvanceSettings,
   putAdvanceSettings,
@@ -23,7 +23,7 @@ router.get('/advance', async (_req, res) => {
   }
 });
 
-router.put('/advance', async (req, res) => {
+router.put('/advance', requireRole('admin'), async (req, res) => {
   try {
     const settings = await putAdvanceSettings(req.body?.settings || req.body, req.user?.email);
     return res.json({ ok: true, settings });
@@ -54,7 +54,7 @@ router.get('/lists/:name', async (req, res) => {
   }
 });
 
-router.put('/lists/:name', async (req, res) => {
+router.put('/lists/:name', requireRole('admin'), async (req, res) => {
   try {
     const items = await putList(req.params.name, req.body?.items || [], req.user?.email);
     return res.json({ ok: true, items });

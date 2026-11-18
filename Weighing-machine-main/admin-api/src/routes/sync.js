@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { authMiddleware } = require('../auth');
+const { authMiddleware, requireRole } = require('../auth');
 const {
   getSyncStatus,
   listRecentCommands,
@@ -37,7 +37,7 @@ router.post('/sync-open-tickets', async (req, res) => {
   }
 });
 
-router.post('/commands/retry-failed', async (_req, res) => {
+router.post('/commands/retry-failed', requireRole('admin'), async (_req, res) => {
   try {
     const result = await retryFailedCommands();
     return res.json({ ok: true, ...result });
@@ -46,7 +46,7 @@ router.post('/commands/retry-failed', async (_req, res) => {
   }
 });
 
-router.post('/commands/:id/retry', async (req, res) => {
+router.post('/commands/:id/retry', requireRole('admin'), async (req, res) => {
   try {
     const command = await retryCommand(req.params.id);
     return res.json({ ok: true, command });

@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { authMiddleware } = require('../auth');
+const { authMiddleware, requireRole } = require('../auth');
 const {
   ensureSchema,
   getCounterHint,
@@ -95,7 +95,7 @@ router.post('/plan', async (req, res) => {
   }
 });
 
-router.post('/:id/fire', async (req, res) => {
+router.post('/:id/fire', requireRole('admin'), async (req, res) => {
   try {
     const row = await fireReservationNow(req.params.id);
     return res.json({ ok: true, row });

@@ -4,8 +4,10 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { isConfigured } = require('./db');
-const { bootstrapAdminUser } = require('./auth');
+const { bootstrapAdminUser, resolveJwtSecret } = require('./auth');
 
 const authRoutes = require('./routes/auth');
 const reportsRoutes = require('./routes/reports');
@@ -27,35 +29,82 @@ const { query } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const isProd = process.env.NODE_ENV === 'production';
 
-const corsOrigin = process.env.CORS_ORIGIN || '*';
+try {
+  resolveJwtSecret();
+} catch (err) {
+  console.error('[auth]', err.message);
+  process.exit(1);
+}
+
 app.use(
-  cors({
-    origin: corsOrigin === '*' ? true : corsOrigin.split(',').map((s) => s.trim()),
-    credentials: true,
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
   }),
 );
-app.use(express.json({ limit: '25mb' }));
 
-app.get('/health', (_req, res) => {
-  res.json({
-    ok: true,
-    db: isConfigured(),
-    siteId: process.env.SITE_ID || 'WB-03',
-  });
+const corsOrigin = (process.env.CORS_ORIGIN || (isProd ? '' : '*')).trim();
+if (isProd && (!corsOrigin || corsOrigin === '*')) {
+  console.error('[api] CORS_ORIGIN must be an explicit allowlist in production');
+  process.exit(1);
+}
+app.use(
+  cors({
+    origin:
+      !corsOrigin || corsOrigin === '*'
+        ? true
+        : corsOrigin.split(',').map((s) => s.trim()).filter(Boolean),
+    credentials: false,
+  }),
+);
+
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '8mb' }));
+
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.RATE_LIMIT_PER_MIN) || 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many requests' },
+});
+app.use(globalLimiter);
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.LOGIN_RATE_LIMIT) || 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many login attempts — try again later' },
 });
 
+const heavyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.HEAVY_RATE_LIMIT_PER_MIN) || 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many heavy requests — slow down' },
+});
+
+app.get('/health', (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.use('/auth/login', loginLimiter);
 app.use('/auth', authRoutes);
 app.use('/reports', reportsRoutes);
 app.use('/settings', settingsRoutes);
 app.use('/sync', syncRoutes);
 app.use('/media', mediaRoutes);
-app.use('/remote-trips', remoteTripsRoutes);
+app.use('/remote-trips', heavyLimiter, remoteTripsRoutes);
 app.use('/slip-reservations', slipReservationsRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error('[api] error', err);
-  res.status(500).json({ ok: false, error: err.message || 'Internal error' });
+  const message =
+    isProd ? 'Internal error' : err.message || 'Internal error';
+  res.status(500).json({ ok: false, error: message });
 });
 
 async function bootstrap() {
@@ -82,7 +131,8 @@ async function bootstrap() {
     );
   }
   try {
-    startMirrorReconcileWorker(query, 60);
+    // Batched reconcile every 2 minutes instead of full-table every 60s.
+    startMirrorReconcileWorker(query, 120);
     startOutTimeReleaseWorker(query, 15000);
     console.log('[api] remote trip → mirror reconcile worker started');
   } catch (err) {
