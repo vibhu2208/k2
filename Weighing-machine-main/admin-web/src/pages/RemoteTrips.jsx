@@ -1251,6 +1251,7 @@ export default function RemoteTrips() {
                 <th className="p-3">Slip</th>
                 <th className="p-3">Vehicle</th>
                 <th className="p-3">Customer</th>
+                <th className="p-3">Destination</th>
                 <th className="p-3">Net</th>
                 <th className="p-3">Gross time</th>
                 <th className="p-3">Tare time</th>
@@ -1269,7 +1270,14 @@ export default function RemoteTrips() {
                     {row.truck_number}
                     <div className="text-xs text-slate-500">{row.vehicle_type || ''}</div>
                   </td>
-                  <td className="p-3">{row.customer_name}</td>
+                  <td className="p-3">{row.customer_name || '—'}</td>
+                  <td className="p-3 max-w-[14rem]">
+                    <Badge tone={row.destination ? 'info' : 'default'}>
+                      <span className="truncate max-w-[12rem]" title={row.destination || ''}>
+                        {row.destination || '—'}
+                      </span>
+                    </Badge>
+                  </td>
                   <td className="p-3">{fmtKg(row.net_weight)}</td>
                   <td className="p-3 text-xs text-slate-300 whitespace-nowrap">
                     {grossAt(row) ? fmtDate(grossAt(row)) : '—'}
@@ -1372,7 +1380,7 @@ export default function RemoteTrips() {
               ))}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-slate-500">
+                  <td colSpan={12} className="p-6 text-center text-slate-500">
                     No remote trips yet.
                   </td>
                 </tr>
