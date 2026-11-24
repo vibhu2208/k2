@@ -66,6 +66,7 @@ export default defineConfig(({ mode }) => {
           '/media',
           '/remote-trips',
           '/slip-reservations',
+          '/offset-audit',
           '/health',
         ].map((prefix) => [
           prefix,

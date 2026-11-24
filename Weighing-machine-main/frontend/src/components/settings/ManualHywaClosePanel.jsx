@@ -24,7 +24,7 @@ const EMPTY_FORM = {
   customer_name: '',
   destination: '',
   operator_name: '',
-  company: 'DCC',
+  company: 'MKG GREEN ENERGY',
   photos: EMPTY_PHOTOS,
 };
 
@@ -61,7 +61,7 @@ export default function ManualHywaClosePanel() {
   const [customers, setCustomers] = useState([]);
   const [destinations, setDestinations] = useState([]);
   const [operators, setOperators] = useState([]);
-  const [companies, setCompanies] = useState(['DCC', 'MKG']);
+  const [companies, setCompanies] = useState(['MKG GREEN ENERGY', 'DCC']);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -94,7 +94,7 @@ export default function ManualHywaClosePanel() {
         setCustomers(c || []);
         setDestinations(d || []);
         setOperators(o || []);
-        setCompanies(Array.isArray(companiesList) && companiesList.length ? companiesList : ['DCC', 'MKG']);
+        setCompanies(Array.isArray(companiesList) && companiesList.length ? companiesList : ['MKG GREEN ENERGY', 'DCC']);
       })
       .catch(() => {});
   }, [refreshTickets]);
@@ -112,7 +112,7 @@ export default function ManualHywaClosePanel() {
       customer_name: ticket.customer_name || '',
       destination: ticket.destination || '',
       operator_name: ticket.operator_name || '',
-      company: ticket.company || 'DCC',
+      company: ticket.company || 'MKG GREEN ENERGY',
       photos: EMPTY_PHOTOS.map(() => ({ imageBase64: '', imageName: '' })),
     });
   }
@@ -230,7 +230,7 @@ export default function ManualHywaClosePanel() {
         customer_name: form.customer_name.trim(),
         destination: form.destination.trim(),
         operator_name: form.operator_name.trim(),
-        company: form.company.trim() || 'DCC',
+        company: form.company.trim() || 'MKG GREEN ENERGY',
       };
 
       let result;

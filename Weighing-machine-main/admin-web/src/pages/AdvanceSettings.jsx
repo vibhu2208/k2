@@ -1,9 +1,17 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client.js';
 
-const ADVANCE_FIELDS = [
+const WEIGHT_AND_ENTRY_FIELDS = [
   { key: 'WEIGHT_ADJUSTMENT_ENABLED', label: 'Enable weight increase', type: 'toggle', weightOnly: true },
   { key: 'WEIGHT_OFFSET_KG', label: 'Increase loaded truck weight by (kg)', type: 'number', weightOnly: true },
+  {
+    key: 'MANUAL_VEHICLE_ENTRY_ENABLED',
+    label: 'Show “Enter vehicle manually” on weighbridge',
+    type: 'toggle',
+  },
+];
+
+const BUSINESS_FIELDS = [
   { key: 'COMPANY_NAME', label: 'Company name', type: 'text' },
   { key: 'COMPANY_ADDRESS', label: 'Company address', type: 'text' },
   { key: 'COMPANY_PHONE', label: 'Company phone', type: 'text' },
@@ -30,7 +38,12 @@ export default function AdvanceSettings() {
   const load = useCallback(async () => {
     try {
       const adv = await api.getAdvanceSettings();
-      setSettings(adv.settings || {});
+      const next = { ...(adv.settings || {}) };
+      // Default hidden unless explicitly enabled.
+      if (next.MANUAL_VEHICLE_ENTRY_ENABLED == null || next.MANUAL_VEHICLE_ENTRY_ENABLED === '') {
+        next.MANUAL_VEHICLE_ENTRY_ENABLED = 'false';
+      }
+      setSettings(next);
       const textData = {};
       await Promise.all(
         LIST_SECTIONS.map(async ({ name }) => {
@@ -75,9 +88,38 @@ export default function AdvanceSettings() {
   }
 
   const weightFeatureAvailable = settings.WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE !== 'false';
-  const visibleFields = ADVANCE_FIELDS.filter(
+  const weightAndEntryFields = WEIGHT_AND_ENTRY_FIELDS.filter(
     (field) => !field.weightOnly || weightFeatureAvailable,
   );
+
+  function renderField(field) {
+    return (
+      <div key={field.key} className="flex items-center justify-between gap-4">
+        <label className="text-sm text-slate-300 shrink-0">{field.label}</label>
+        {field.type === 'toggle' ? (
+          <input
+            type="checkbox"
+            checked={settings[field.key] === 'true'}
+            onChange={(e) =>
+              setSettings((s) => ({
+                ...s,
+                [field.key]: e.target.checked ? 'true' : 'false',
+              }))
+            }
+          />
+        ) : (
+          <input
+            type={field.type}
+            className="field-input max-w-xs"
+            value={settings[field.key] ?? ''}
+            onChange={(e) =>
+              setSettings((s) => ({ ...s, [field.key]: e.target.value }))
+            }
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -89,38 +131,20 @@ export default function AdvanceSettings() {
       </div>
 
       <div className="card p-5 space-y-3">
-        <h3 className="font-medium text-brand-300">Business & report settings</h3>
         {!weightFeatureAvailable && (
           <p className="text-xs text-red-400 font-mono">
             Technical error: WEIGHT_ADJUSTMENT-error
           </p>
         )}
-        {visibleFields.map((field) => (
-          <div key={field.key} className="flex items-center justify-between gap-4">
-            <label className="text-sm text-slate-300 shrink-0">{field.label}</label>
-            {field.type === 'toggle' ? (
-              <input
-                type="checkbox"
-                checked={settings[field.key] === 'true'}
-                onChange={(e) =>
-                  setSettings((s) => ({
-                    ...s,
-                    [field.key]: e.target.checked ? 'true' : 'false',
-                  }))
-                }
-              />
-            ) : (
-              <input
-                type={field.type}
-                className="field-input max-w-xs"
-                value={settings[field.key] ?? ''}
-                onChange={(e) =>
-                  setSettings((s) => ({ ...s, [field.key]: e.target.value }))
-                }
-              />
-            )}
-          </div>
-        ))}
+        {weightAndEntryFields.map(renderField)}
+        <button type="button" className="btn-primary mt-2" onClick={saveSettings}>
+          Save settings
+        </button>
+      </div>
+
+      <div className="card p-5 space-y-3">
+        <h3 className="font-medium text-brand-300">Business &amp; report settings</h3>
+        {BUSINESS_FIELDS.map(renderField)}
         <button type="button" className="btn-primary mt-2" onClick={saveSettings}>
           Save settings
         </button>

@@ -112,27 +112,44 @@ async function buildWeighmentPhotoRow(row, passLabel, sectionTitle) {
   </div>`;
 }
 
-/** Site heading must not show the old DCC suffix. */
+const MKG_GREEN_ENERGY_NAME = 'MKG GREEN ENERGY';
+const DEFAULT_SITE_NAME = 'BANDHWARI SLF SITE GURURAM (HARYANA)';
+
+/** Site heading must not show DCC / Daya Charan / leftover MKG suffixes. */
 function stripDccFromSiteName(siteName) {
   return String(siteName || '')
     .replace(/\bDCC\b/gi, '')
+    .replace(/\bDAYA\s*CHARAN\b/gi, '')
+    .replace(/\bMKG\s+GREEN\s+ENERGY\b/gi, '')
+    .replace(/\bMKG\s+GREENS\b/gi, '')
+    .replace(/\bMKG\s+ENERGY\b/gi, '')
+    .replace(/\bMKG\b/gi, '')
     .replace(/\s{2,}/g, ' ')
     .replace(/\s+\)/g, ')')
     .trim();
 }
 
-const DEFAULT_SITE_NAME = 'BANDHWARI SLF SITE GURURAM (HARYANA)';
+/** True for legacy MKG / MKG GREENS tickets and "MKG GREEN ENERGY". */
+function isMkgGreensCompany(ticketCompany) {
+  const code = String(ticketCompany || '').trim().toUpperCase();
+  return (
+    code === 'MKG' ||
+    code === 'MKG GREENS' ||
+    code === 'MKG GREEN ENERGY' ||
+    code === 'MKG ENERGY' ||
+    code.includes('MKG')
+  );
+}
 
 /**
- * MKG tickets must not show "DCC" / Daya Charan branding on the slip report.
- * Accepts "MKG", "MKG GREEN ENERGY", etc. Always strips DCC from the site line.
+ * MKG / remote-trip reports must not show "DCC" on the slip header.
+ * Header layout: org → site (no DCC) → MKG GREEN ENERGY → WB id.
  */
 function brandCompanyForTicket(company = {}, ticketCompany) {
-  const code = String(ticketCompany || '').trim().toUpperCase();
   const baseSite = company.siteName || company.address || DEFAULT_SITE_NAME;
   const siteName = stripDccFromSiteName(baseSite) || DEFAULT_SITE_NAME;
 
-  if (!code.includes('MKG')) {
+  if (!isMkgGreensCompany(ticketCompany)) {
     if (siteName === String(company.siteName || '').trim()) return company;
     return { ...company, siteName };
   }
@@ -140,9 +157,9 @@ function brandCompanyForTicket(company = {}, ticketCompany) {
   return {
     ...company,
     siteName,
-    // Prefer the full ticket company label when present (e.g. MKG GREEN ENERGY).
+    headerBrandName: MKG_GREEN_ENERGY_NAME,
     reportCompanyName:
-      String(ticketCompany || '').trim() || company.reportCompanyName || 'MKG GREEN ENERGY',
+      String(ticketCompany || '').trim() || company.reportCompanyName || MKG_GREEN_ENERGY_NAME,
   };
 }
 
@@ -160,14 +177,18 @@ async function buildVehicleReportPage(row, company = {}) {
   const orgName = branded.name || 'MUNICIPAL CORPORATION GURUGRAM';
   const siteName =
     stripDccFromSiteName(branded.siteName || branded.address) || DEFAULT_SITE_NAME;
-  const weighbridgeId = branded.weighbridgeId || 'WB - 03';
+  const headerBrand = branded.headerBrandName || '';
+  const weighbridgeId = branded.weighbridgeId || 'WB-04';
   const customerName = row.customer_name || '—';
   const destination = row.destination || '—';
-  const companyName = branded.reportCompanyName || 'MKG GREEN ENERGY';
+  const companyName = branded.reportCompanyName || MKG_GREEN_ENERGY_NAME;
   const operatorName = row.operator_name || '—';
   const logoHtml = await buildReportLogoHtml(branded);
   const arrivalPhotos = await buildWeighmentPhotoRow(row, 'arrival', '1ST WEIGHMENTS');
   const departurePhotos = await buildWeighmentPhotoRow(row, 'departure', '2ND WEIGHMENTS');
+  const brandLine = headerBrand
+    ? `<div class="header-brand">${escapeHtml(headerBrand)}</div>`
+    : '';
 
   return `<div class="vehicle-report">
     <div class="report-header">
@@ -175,6 +196,7 @@ async function buildVehicleReportPage(row, company = {}) {
       <div class="header-center">
         <div class="org-name">${escapeHtml(orgName)}</div>
         <div class="site-name">${escapeHtml(siteName)}</div>
+        ${brandLine}
         <div class="weighbridge-id">${escapeHtml(weighbridgeId)}</div>
       </div>
       <div class="print-date">Print Date : ${escapeHtml(ts.toDisplay(ts.now()))}</div>
@@ -251,6 +273,7 @@ function buildVehicleReportStyles() {
     .header-center { flex: 1; text-align: center; }
     .org-name { font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; }
     .site-name { margin-top: 4px; font-size: 13px; text-transform: uppercase; }
+    .header-brand { margin-top: 4px; font-size: 13px; font-weight: 700; text-transform: uppercase; }
     .weighbridge-id { margin-top: 4px; font-size: 13px; font-weight: 600; }
     .print-date { position: absolute; top: 0; right: 0; font-size: 11px; white-space: nowrap; }
     .details-grid { display: flex; gap: 24px; margin-bottom: 16px; }
@@ -293,18 +316,23 @@ function buildCombinedCoverPage(company = {}, meta = {}) {
   const orgName = company.name || 'MUNICIPAL CORPORATION GURUGRAM';
   const siteName =
     stripDccFromSiteName(company.siteName || company.address) || DEFAULT_SITE_NAME;
-  const weighbridgeId = company.weighbridgeId || 'WB - 03';
+  const headerBrand = company.headerBrandName || '';
+  const weighbridgeId = company.weighbridgeId || 'WB-04';
   const period = meta.periodLabel || meta.period || '—';
   const generated = meta.generatedAt || ts.toDisplay(ts.now());
   const totalTickets = meta.totalTickets ?? meta.total ?? 0;
   const gross = meta.gross ?? 0;
   const tare = meta.tare ?? 0;
   const net = meta.net ?? 0;
+  const brandLine = headerBrand
+    ? `<div class="cover-brand">${escapeHtml(headerBrand)}</div>`
+    : '';
 
   return `<div class="cover-page">
     <div class="cover-inner">
       <div class="cover-org">${escapeHtml(orgName)}</div>
       <div class="cover-site">${escapeHtml(siteName)}</div>
+      ${brandLine}
       <div class="cover-weighbridge-id">${escapeHtml(weighbridgeId)}</div>
       <div class="cover-title">Weighbridge Report Pack</div>
       <table class="cover-meta">
@@ -333,6 +361,7 @@ function buildCombinedCoverStyles() {
     .cover-inner { text-align: center; width: 100%; max-width: 520px; }
     .cover-org { font-size: 24px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
     .cover-site { margin-top: 8px; font-size: 15px; color: #444; text-transform: uppercase; }
+    .cover-brand { margin-top: 6px; font-size: 15px; font-weight: 700; text-transform: uppercase; }
     .cover-weighbridge-id { margin-top: 6px; font-size: 14px; font-weight: 600; }
     .cover-title {
       margin: 28px 0 24px;
@@ -366,12 +395,16 @@ async function buildVehicleReportHtml(rows, options = {}) {
     const pages = await Promise.all(batch.map((row) => buildVehicleReportPage(row, company)));
     ticketPages.push(...pages);
   }
-  // Cover uses MKG branding only when every ticket in the pack is MKG.
+  // Cover uses MKG branding only when every ticket in the pack is MKG brand.
   const ticketCompanies = uniqueTicketCompanies(list);
   const coverCompany =
-    ticketCompanies.length === 1 && ticketCompanies[0] === 'MKG'
-      ? brandCompanyForTicket(company, 'MKG')
-      : company;
+    ticketCompanies.length === 1 && isMkgGreensCompany(ticketCompanies[0])
+      ? brandCompanyForTicket(company, 'MKG GREEN ENERGY')
+      : {
+          ...company,
+          siteName:
+            stripDccFromSiteName(company.siteName || company.address) || DEFAULT_SITE_NAME,
+        };
   const cover = coverMeta
     ? buildCombinedCoverPage(coverCompany, coverMeta)
     : '';
@@ -604,7 +637,7 @@ function buildDetailedReportHtml(rows, options = {}) {
 <html><head><meta charset="utf-8"/>${buildReportStyles()}</head>
 <body>
   <h1>${escapeHtml(company.name || 'MUNICIPAL CORPORATION GURUGRAM')}</h1>
-  <p class="meta">${escapeHtml(stripDccFromSiteName(company.siteName || company.address) || DEFAULT_SITE_NAME)}<br/>${escapeHtml(company.weighbridgeId || 'WB - 03')}${company.phone ? `<br/>Tel: ${escapeHtml(company.phone)}` : ''}</p>
+  <p class="meta">${escapeHtml(stripDccFromSiteName(company.siteName || company.address) || DEFAULT_SITE_NAME)}${company.headerBrandName ? `<br/>${escapeHtml(company.headerBrandName)}` : ''}<br/>${escapeHtml(company.weighbridgeId || 'WB-04')}${company.phone ? `<br/>Tel: ${escapeHtml(company.phone)}` : ''}</p>
   <h2>${escapeHtml(title)}</h2>
   <p class="meta">${escapeHtml(describeFilters(filters))}<br/>Generated ${escapeHtml(ts.toDisplay(ts.now()))}</p>
   ${buildSummaryTable(rows)}
@@ -623,6 +656,8 @@ module.exports = {
   photoPathForSlot,
   imageToDataUrl,
   imageSrcForPdf,
+  stripDccFromSiteName,
+  isMkgGreensCompany,
   brandCompanyForTicket,
   buildCombinedCoverPage,
   buildDetailedReportHtml,

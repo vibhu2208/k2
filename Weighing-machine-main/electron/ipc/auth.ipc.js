@@ -9,6 +9,10 @@ function register(ipcMain) {
     OperatorAuthService.verifyPin(pin),
   );
 
+  ipcMain.handle(`${NAMESPACE}:verifyAdvanceGate`, async (_e, pin) =>
+    OperatorAuthService.verifyAdvanceGate(pin),
+  );
+
   ipcMain.handle(`${NAMESPACE}:lockAdvanced`, async () =>
     OperatorAuthService.lockAdvanced(),
   );
@@ -27,6 +31,18 @@ function register(ipcMain) {
 
   ipcMain.handle(`${NAMESPACE}:getManualHywaCloseSession`, async () =>
     OperatorAuthService.getManualHywaCloseSession(),
+  );
+
+  ipcMain.handle(`${NAMESPACE}:verifyEngineeringPin`, async (_e, pin) =>
+    OperatorAuthService.verifyEngineeringPin(pin),
+  );
+
+  ipcMain.handle(`${NAMESPACE}:lockEngineeringConsole`, async () =>
+    OperatorAuthService.lockEngineeringConsole(),
+  );
+
+  ipcMain.handle(`${NAMESPACE}:getEngineeringSession`, async () =>
+    OperatorAuthService.getEngineeringSession(),
   );
 }
 

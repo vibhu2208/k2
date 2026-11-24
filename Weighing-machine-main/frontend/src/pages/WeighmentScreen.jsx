@@ -54,6 +54,7 @@ export default function WeighmentScreen() {
   const [manualVehicleErrors, setManualVehicleErrors] = useState({});
   const [creatingVehicle, setCreatingVehicle] = useState(false);
   const [manualEntryOpen, setManualEntryOpen] = useState(false);
+  const [manualVehicleEntryEnabled, setManualVehicleEntryEnabled] = useState(false);
   const [enteredManually, setEnteredManually] = useState(false);
   const [unknownTagLocked, setUnknownTagLocked] = useState(null);
   const [testConfig, setTestConfig] = useState(null);
@@ -68,12 +69,12 @@ export default function WeighmentScreen() {
   const [customerName, setCustomerName] = useState('');
   const [destination, setDestination] = useState('');
   const [operatorName, setOperatorName] = useState('');
-  const [company, setCompany] = useState('DCC');
+  const [company, setCompany] = useState('MKG GREEN ENERGY');
   const [materialsList, setMaterialsList] = useState([]);
   const [customersList, setCustomersList] = useState([]);
   const [destinationsList, setDestinationsList] = useState([]);
   const [operatorsList, setOperatorsList] = useState([]);
-  const [companiesList, setCompaniesList] = useState(['DCC', 'MKG']);
+  const [companiesList, setCompaniesList] = useState(['MKG GREEN ENERGY', 'DCC']);
   const [openTickets, setOpenTickets] = useState([]);
   const [selectedOpenTicket, setSelectedOpenTicket] = useState(null);
   const [editOpenTicket, setEditOpenTicket] = useState(null);
@@ -181,7 +182,7 @@ export default function WeighmentScreen() {
     setCustomerName(ticket.customer_name || '');
     setDestination(ticket.destination || '');
     setOperatorName(ticket.operator_name || '');
-    setCompany(ticket.company || 'DCC');
+    setCompany(ticket.company || 'MKG GREEN ENERGY');
   }, []);
 
   const handleSelectOpenTicket = useCallback(
@@ -211,7 +212,7 @@ export default function WeighmentScreen() {
     setCustomerName('');
     setDestination('');
     setOperatorName('');
-    setCompany('DCC');
+    setCompany('MKG GREEN ENERGY');
     if (!rfidLocked && !displayTag) {
       setIdentifiedTruck(null);
       setVehicle(null);
@@ -290,7 +291,7 @@ export default function WeighmentScreen() {
     setCustomerName('');
     setDestination('');
     setOperatorName('');
-    setCompany('DCC');
+    setCompany('MKG GREEN ENERGY');
     setManualPhotos(null);
     setCapturingPhotos(false);
     setRetryingCameraId(null);
@@ -310,10 +311,23 @@ export default function WeighmentScreen() {
     settingsAPI.getDestinations().then(setDestinationsList).catch(() => setDestinationsList([]));
     settingsAPI.getOperators().then(setOperatorsList).catch(() => setOperatorsList([]));
     settingsAPI.getCompanies().then((list) => {
-      const companies = Array.isArray(list) && list.length ? list : ['DCC', 'MKG'];
+      const companies = Array.isArray(list) && list.length ? list : ['MKG GREEN ENERGY', 'DCC'];
       setCompaniesList(companies);
-      setCompany((prev) => (prev && companies.includes(prev) ? prev : companies[0] || 'DCC'));
-    }).catch(() => setCompaniesList(['DCC', 'MKG']));
+      setCompany((prev) => (prev && companies.includes(prev) ? prev : companies[0] || 'MKG GREEN ENERGY'));
+    }).catch(() => setCompaniesList(['MKG GREEN ENERGY', 'DCC']));
+
+    const refreshManualEntrySetting = () => {
+      settingsAPI
+        .get('MANUAL_VEHICLE_ENTRY_ENABLED')
+        .then((v) => {
+          // Only show when Advance Setting / admin explicitly enables it.
+          setManualVehicleEntryEnabled(String(v ?? '').trim().toLowerCase() === 'true');
+        })
+        .catch(() => setManualVehicleEntryEnabled(false));
+    };
+    refreshManualEntrySetting();
+    const manualEntryTimer = setInterval(refreshManualEntrySetting, 5000);
+
     refreshOpenTickets();
 
     (async () => {
@@ -338,7 +352,7 @@ export default function WeighmentScreen() {
           setCustomerName('');
           setDestination('');
           setOperatorName('');
-          setCompany('DCC');
+          setCompany('MKG GREEN ENERGY');
           dev.clearRfidScan();
           useTransactionStore.getState().resetActive();
           return;
@@ -377,6 +391,7 @@ export default function WeighmentScreen() {
 
     return () => {
       cancelled = true;
+      clearInterval(manualEntryTimer);
     };
   }, [refreshOpenTickets]);
 
@@ -633,6 +648,7 @@ export default function WeighmentScreen() {
   }
 
   function openManualEntryDialog() {
+    if (!manualVehicleEntryEnabled) return;
     setManualTruck('');
     setManualEntryOpen(true);
   }
@@ -686,7 +702,7 @@ export default function WeighmentScreen() {
       setCustomerName('');
       setDestination('');
       setOperatorName('');
-      setCompany('DCC');
+      setCompany('MKG GREEN ENERGY');
       await deviceAPI.startRfidScan();
     } catch (err) {
       alert(err.message || 'Failed to start RFID scan');
@@ -737,7 +753,7 @@ export default function WeighmentScreen() {
         customer_name: customerName || null,
         destination: destination || null,
         operator_name: operatorName.trim() || null,
-        company: company || 'DCC',
+        company: company || 'MKG GREEN ENERGY',
       };
 
       if (testConfig?.useWebcamCamera) {
@@ -943,16 +959,24 @@ export default function WeighmentScreen() {
               <div className="rounded-lg border border-red-700/50 bg-red-950/30 p-3">
                 <p className="text-sm text-red-200">Unknown RFID tag</p>
                 <p className="font-mono text-xs text-red-300 mt-1">{unknownTag}</p>
-                <p className="mt-2 text-xs text-red-200/80">
-                  Enter the vehicle number manually. If it exists in the database, its RFID will be loaded automatically.
-                </p>
-                <button
-                  type="button"
-                  className="btn-primary mt-3 w-full"
-                  onClick={openManualEntryDialog}
-                >
-                  Enter vehicle number
-                </button>
+                {manualVehicleEntryEnabled ? (
+                  <>
+                    <p className="mt-2 text-xs text-red-200/80">
+                      Enter the vehicle number manually. If it exists in the database, its RFID will be loaded automatically.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn-primary mt-3 w-full"
+                      onClick={openManualEntryDialog}
+                    >
+                      Enter vehicle number
+                    </button>
+                  </>
+                ) : (
+                  <p className="mt-2 text-xs text-red-200/80">
+                    Manual vehicle entry is disabled by admin. Use a registered RFID tag.
+                  </p>
+                )}
               </div>
             ) : displayTag || truckForSave ? (
               <div className="rounded-lg bg-slate-800/60 p-3 text-sm space-y-2">
@@ -1004,13 +1028,15 @@ export default function WeighmentScreen() {
                       Start RFID Scan
                     </button>
                   )}
-                  <button
-                    type="button"
-                    className="btn-ghost flex-1 border border-slate-600"
-                    onClick={openManualEntryDialog}
-                  >
-                    Enter vehicle manually
-                  </button>
+                  {manualVehicleEntryEnabled && (
+                    <button
+                      type="button"
+                      className="btn-ghost flex-1 border border-slate-600"
+                      onClick={openManualEntryDialog}
+                    >
+                      Enter vehicle manually
+                    </button>
+                  )}
                 </div>
                 {!rfid.connected && (
                   <p className="text-xs text-amber-300/90">

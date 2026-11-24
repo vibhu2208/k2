@@ -144,8 +144,13 @@ async function canReachMailNetwork() {
 async function zipEntries(outPath, entries) {
   const zip = new JSZip();
   for (const entry of entries) {
-    if (!entry?.path || !fs.existsSync(entry.path)) continue;
-    const name = entry.name || path.basename(entry.path);
+    const name = entry?.name || (entry?.path ? path.basename(entry.path) : null);
+    if (!name) continue;
+    if (entry.content != null) {
+      zip.file(name, entry.content);
+      continue;
+    }
+    if (!entry.path || !fs.existsSync(entry.path)) continue;
     // eslint-disable-next-line no-await-in-loop
     const data = await fs.promises.readFile(entry.path);
     zip.file(name, data);
@@ -199,16 +204,44 @@ async function buildAttachments(reportDate) {
     entries.push({ path: dataPdf.path, name: path.basename(dataPdf.path) });
   }
 
-  let tripCount = 0;
-  if (envFlag('DAILY_REPORT_MAIL_INCLUDE_TRIP_PDF', true)) {
-    const tripEntries = await collectTripPdfEntries(reportDate);
-    tripCount = tripEntries.length;
-    entries.push(...tripEntries);
+  let offsetAuditCount = 0;
+  let offsetAuditTons = 0;
+  try {
+    const WeightOffsetAuditService = require('./WeightOffsetAuditService');
+    const offsetExcel = await WeightOffsetAuditService.exportExcel({
+      from,
+      to,
+      allowEmpty: true,
+      filenameBase: `weight_offset_audit_${reportDate}`,
+    });
+    if (offsetExcel?.ok && offsetExcel.buffer) {
+      entries.push({
+        content: offsetExcel.buffer,
+        name: offsetExcel.filename || `weight_offset_audit_${reportDate}.xlsx`,
+      });
+      offsetAuditCount = offsetExcel.count || 0;
+      offsetAuditTons = offsetExcel.totalOffsetTons || 0;
+    }
+  } catch (err) {
+    logger.warn('Daily report mail: offset audit Excel skipped', {
+      reportDate,
+      message: err.message,
+    });
   }
+
+  // Trip / slip PDFs omitted from daily mail for now.
+  const tripCount = 0;
 
   const count = excel?.count || dataPdf?.count || 0;
   if (!entries.length) {
-    return { attachments: [], count: 0, tripCount: 0, empty: true };
+    return {
+      attachments: [],
+      count: 0,
+      tripCount: 0,
+      offsetAuditCount: 0,
+      offsetAuditTons: 0,
+      empty: true,
+    };
   }
 
   ensureDir(PATHS.UPLOADS);
@@ -243,6 +276,8 @@ async function buildAttachments(reportDate) {
     ],
     count,
     tripCount,
+    offsetAuditCount,
+    offsetAuditTons,
     empty: false,
     zipPath,
     zipBytes: finalSize,
@@ -301,7 +336,10 @@ async function sendMail({ reportDate, bundle }) {
       `Weighbridge: ${wbId}\n\n` +
       `Closed tickets: ${bundle.count}\n` +
       `Trip PDFs included: ${bundle.tripCount}\n` +
-      `Attachment: ${bundle.attachments[0]?.filename || 'daily report ZIP'}\n`;
+      `Offset audit rows: ${bundle.offsetAuditCount || 0}\n` +
+      `Offset total: ${bundle.offsetAuditTons || 0} ton(s)\n` +
+      `Attachment: ${bundle.attachments[0]?.filename || 'daily report ZIP'} ` +
+      `(includes weight_offset_audit Excel)\n`;
   }
 
   const transport = createTransport();
@@ -348,11 +386,19 @@ async function runForDate(reportDate, options = {}) {
       reportDate,
       count: bundle.count,
       tripCount: bundle.tripCount,
+      offsetAuditCount: bundle.offsetAuditCount || 0,
+      offsetAuditTons: bundle.offsetAuditTons || 0,
       empty: bundle.empty,
       zipBytes: bundle.zipBytes || 0,
       reason: options.reason || 'schedule',
     });
-    return { ok: true, reportDate, count: bundle.count, tripCount: bundle.tripCount };
+    return {
+      ok: true,
+      reportDate,
+      count: bundle.count,
+      tripCount: bundle.tripCount,
+      offsetAuditCount: bundle.offsetAuditCount || 0,
+    };
   } catch (err) {
     logger.logError(`Daily report mail failed (${reportDate})`, err);
     if (isNetworkishError(err) || !(await canReachMailNetwork())) {

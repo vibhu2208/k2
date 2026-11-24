@@ -28,6 +28,36 @@ const {
 
 const MIN_JPEG_BYTES = parseInt(process.env.CAMERA_MIN_JPEG_BYTES || '2048', 10);
 
+function recordWeightOffsetAudit({
+  transaction,
+  truckNumber,
+  rfidTag,
+  vehicleType,
+  pass,
+  offsetKg,
+  rawWeightKg,
+  adjustedWeightKg,
+  operatorName,
+}) {
+  try {
+    require('./WeightOffsetAuditService').record({
+      transactionId: transaction?.id || null,
+      slipNumber: transaction?.slip_number || null,
+      truckNumber: truckNumber || transaction?.truck_number,
+      rfidTag: rfidTag || transaction?.rfid_tag,
+      vehicleType: vehicleType || null,
+      pass: pass || 'GROSS',
+      offsetKg,
+      rawWeightKg,
+      adjustedWeightKg,
+      operatorName: operatorName || transaction?.operator_name || null,
+      createdAt: transaction?.timestamp_out || transaction?.timestamp_in || null,
+    });
+  } catch (err) {
+    logger.warn('Weight offset audit record failed', { message: err.message });
+  }
+}
+
 function verifyPhotoFields(fields, kind) {
   const minCount = getMinPhotoCountToSave();
   if (!isCameraRequired() || minCount <= 0) return;
@@ -478,7 +508,7 @@ async function openTicketSave({
     customer_name: customer_name || null,
     destination: destination || null,
     operator_name: operator_name || null,
-    company: company || 'DCC',
+    company: company || 'MKG GREEN ENERGY',
     operator_id: operatorId || null,
   });
 
@@ -530,7 +560,7 @@ async function openTicketSave({
     customer_name: customer_name || null,
     destination: destination || null,
     operator_name: operator_name || null,
-    company: company || 'DCC',
+    company: company || 'MKG GREEN ENERGY',
     ...arrivalPhotos,
     departure_photo_1: null,
     departure_photo_2: null,
@@ -554,6 +584,18 @@ async function openTicketSave({
       message: err.message,
     });
   }
+
+  recordWeightOffsetAudit({
+    transaction,
+    truckNumber,
+    rfidTag,
+    vehicleType,
+    pass: hywa ? 'GROSS' : 'TARE',
+    offsetKg: weightOffsetKg,
+    rawWeightKg,
+    adjustedWeightKg: weightKg,
+    operatorName: operator_name,
+  });
 
   return {
     transaction,
@@ -614,7 +656,7 @@ async function closeTicket({
   const resolvedCustomer = resolveField(customer_name, openTicket.customer_name);
   const resolvedDestination = resolveField(destination, openTicket.destination);
   const resolvedOperator = resolveField(operator_name, openTicket.operator_name);
-  const resolvedCompany = resolveField(company, openTicket.company) || 'DCC';
+  const resolvedCompany = resolveField(company, openTicket.company) || 'MKG GREEN ENERGY';
 
   if (!resolvedMaterial) {
     throw new Error('Material is required before closing the ticket');
@@ -721,6 +763,18 @@ async function closeTicket({
   } catch (err) {
     logger.warn('Cloud admin sync enqueue failed', { transactionId: txnId, message: err.message });
   }
+
+  recordWeightOffsetAudit({
+    transaction,
+    truckNumber,
+    rfidTag,
+    vehicleType,
+    pass: hywa ? 'TARE' : 'GROSS',
+    offsetKg: weightOffsetKg,
+    rawWeightKg,
+    adjustedWeightKg: weightKg,
+    operatorName: resolvedOperator,
+  });
 
   return {
     transaction,

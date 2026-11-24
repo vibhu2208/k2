@@ -10,6 +10,7 @@ const nav = [
   { to: '/remote-trips/import', label: 'Bulk Import' },
   { to: '/bulk-photos', label: 'Bulk Photos' },
   { to: '/settings/advance', label: 'Advance Settings' },
+  { to: '/offset-data', label: 'Offset Data' },
   { to: '/sync', label: 'Sync Status' },
 ];
 

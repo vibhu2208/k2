@@ -74,24 +74,40 @@ function weightLine(label, kg, timestampIso) {
   </div>`;
 }
 
-/** Site heading must not show the old DCC suffix. */
+const MKG_GREEN_ENERGY_NAME = 'MKG GREEN ENERGY';
+const DEFAULT_SITE_NAME = 'BANDHWARI SLF SITE GURURAM (HARYANA)';
+
+/** Site heading must not show DCC / Daya Charan / leftover MKG suffixes. */
 function stripDccFromSiteName(siteName) {
   return String(siteName || '')
     .replace(/\bDCC\b/gi, '')
+    .replace(/\bDAYA\s*CHARAN\b/gi, '')
+    .replace(/\bMKG\s+GREEN\s+ENERGY\b/gi, '')
+    .replace(/\bMKG\s+GREENS\b/gi, '')
+    .replace(/\bMKG\s+ENERGY\b/gi, '')
+    .replace(/\bMKG\b/gi, '')
     .replace(/\s{2,}/g, ' ')
     .replace(/\s+\)/g, ')')
     .trim();
 }
 
-const DEFAULT_SITE_NAME = 'BANDHWARI SLF SITE GURURAM (HARYANA)';
-
-function brandCompanyForTicket(company = {}, ticketCompany) {
+function isMkgGreensCompany(ticketCompany) {
   const code = String(ticketCompany || '').trim().toUpperCase();
-  const baseSite =
-    company.siteName || company.address || DEFAULT_SITE_NAME;
+  return (
+    code === 'MKG' ||
+    code === 'MKG GREENS' ||
+    code === 'MKG GREEN ENERGY' ||
+    code === 'MKG ENERGY' ||
+    code.includes('MKG')
+  );
+}
+
+/** Remote / MKG slips: strip DCC from site header; show MKG GREEN ENERGY brand line. */
+function brandCompanyForTicket(company = {}, ticketCompany) {
+  const baseSite = company.siteName || company.address || DEFAULT_SITE_NAME;
   const siteName = stripDccFromSiteName(baseSite) || DEFAULT_SITE_NAME;
 
-  if (!code.includes('MKG')) {
+  if (!isMkgGreensCompany(ticketCompany)) {
     if (siteName === String(company.siteName || '').trim()) return company;
     return { ...company, siteName };
   }
@@ -99,8 +115,9 @@ function brandCompanyForTicket(company = {}, ticketCompany) {
   return {
     ...company,
     siteName,
+    headerBrandName: MKG_GREEN_ENERGY_NAME,
     reportCompanyName:
-      String(ticketCompany || '').trim() || company.reportCompanyName || 'MKG GREEN ENERGY',
+      String(ticketCompany || '').trim() || company.reportCompanyName || MKG_GREEN_ENERGY_NAME,
   };
 }
 
@@ -201,6 +218,7 @@ function buildVehicleReportStyles() {
     .header-center { flex: 1; text-align: center; }
     .org-name { font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; }
     .site-name { margin-top: 4px; font-size: 13px; text-transform: uppercase; }
+    .header-brand { margin-top: 4px; font-size: 13px; font-weight: 700; text-transform: uppercase; }
     .weighbridge-id { margin-top: 4px; font-size: 13px; font-weight: 600; }
     .print-date { position: absolute; top: 0; right: 0; font-size: 11px; white-space: nowrap; }
     .details-grid { display: flex; gap: 24px; margin-bottom: 16px; }
@@ -259,14 +277,18 @@ function buildVehicleReportPage(row, company = {}, photoDataUrls = {}) {
   const orgName = branded.name || 'MUNICIPAL CORPORATION GURUGRAM';
   const siteName =
     stripDccFromSiteName(branded.siteName || branded.address) || DEFAULT_SITE_NAME;
-  const weighbridgeId = branded.weighbridgeId || 'WB - 03';
+  const headerBrand = branded.headerBrandName || '';
+  const weighbridgeId = branded.weighbridgeId || 'WB-04';
   const customerName = row.customer_name || '—';
   const destination = row.destination || '—';
-  const companyName = branded.reportCompanyName || 'MKG GREEN ENERGY';
+  const companyName = branded.reportCompanyName || MKG_GREEN_ENERGY_NAME;
   const operatorName = row.operator_name || '—';
   const logoHtml = buildReportLogoHtml(branded);
   const arrivalPhotos = buildWeighmentPhotoRow(photoDataUrls.arrival, '1ST WEIGHMENTS');
   const departurePhotos = buildWeighmentPhotoRow(photoDataUrls.departure, '2ND WEIGHMENTS');
+  const brandLine = headerBrand
+    ? `<div class="header-brand">${escapeHtml(headerBrand)}</div>`
+    : '';
 
   return `<div class="vehicle-report">
     <div class="report-header">
@@ -274,6 +296,7 @@ function buildVehicleReportPage(row, company = {}, photoDataUrls = {}) {
       <div class="header-center">
         <div class="org-name">${escapeHtml(orgName)}</div>
         <div class="site-name">${escapeHtml(siteName)}</div>
+        ${brandLine}
         <div class="weighbridge-id">${escapeHtml(weighbridgeId)}</div>
       </div>
       <div class="print-date">Print Date : ${escapeHtml(toDisplay(printTimestamp(row)))}</div>

@@ -148,11 +148,15 @@ const electronAPI = {
 
   auth: buildNamespace('auth', [
     'verifyPin',
+    'verifyAdvanceGate',
     'lockAdvanced',
     'getSession',
     'verifyManualHywaPin',
     'lockManualHywaClose',
     'getManualHywaCloseSession',
+    'verifyEngineeringPin',
+    'lockEngineeringConsole',
+    'getEngineeringSession',
   ]),
 
   /**

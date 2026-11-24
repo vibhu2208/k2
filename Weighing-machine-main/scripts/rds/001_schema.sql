@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS remote_trips (
   destination       TEXT NOT NULL,
   material          TEXT NOT NULL,
   operator_name     TEXT NOT NULL,
+  company           TEXT NOT NULL DEFAULT 'MKG GREEN ENERGY',
   transporter       TEXT,
   vehicle_type      TEXT,
   tare_weight       DOUBLE PRECISION,

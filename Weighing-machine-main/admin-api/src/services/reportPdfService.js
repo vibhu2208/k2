@@ -50,16 +50,24 @@ function formatWeighbridgeId(raw, siteId) {
 
 function companySettings() {
   const siteId = getSiteId();
+  const rawSite =
+    process.env.SITE_NAME ||
+    process.env.COMPANY_ADDRESS ||
+    'BANDHWARI SLF SITE GURURAM (HARYANA)';
+  const siteName =
+    String(rawSite)
+      .replace(/\bDCC\b/gi, '')
+      .replace(/\bDAYA\s*CHARAN\b/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim() || 'BANDHWARI SLF SITE GURURAM (HARYANA)';
   return {
     name: process.env.COMPANY_NAME || 'MUNICIPAL CORPORATION GURUGRAM',
     address: process.env.COMPANY_ADDRESS || '',
     phone: process.env.COMPANY_PHONE || '',
-    siteName:
-      process.env.SITE_NAME ||
-      process.env.COMPANY_ADDRESS ||
-      'BANDHWARI SLF SITE GURURAM (HARYANA)',
+    siteName,
     weighbridgeId: formatWeighbridgeId(process.env.WEIGHBRIDGE_ID, siteId),
     reportCompanyName: process.env.REPORT_COMPANY_NAME || 'MKG GREEN ENERGY',
+    headerBrandName: 'MKG GREEN ENERGY',
     logoPath: process.env.REPORT_LOGO_PATH || '',
   };
 }

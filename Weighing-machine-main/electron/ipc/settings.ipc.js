@@ -6,7 +6,10 @@ const { ADMIN_WEIGHT_KEYS } = require('../../backend/services/WeightAdjustmentSe
 
 const NAMESPACE = 'settings';
 
-const ADMIN_ONLY_SET = new Set(ADMIN_WEIGHT_KEYS);
+const ADMIN_ONLY_SET = new Set([
+  ...ADMIN_WEIGHT_KEYS,
+  'MANUAL_VEHICLE_ENTRY_ENABLED',
+]);
 
 const CLOUD_BACKUP_KEYS = new Set([
   'AWS_ACCESS_KEY_ID',

@@ -22,6 +22,7 @@ function mockQuery(initial) {
           { column_name: 'tare_weight', is_nullable: 'YES' },
           { column_name: 'gross_weight', is_nullable: 'YES' },
           { column_name: 'timestamp_out', is_nullable: 'YES' },
+          { column_name: 'company', is_nullable: 'NO' },
         ],
       };
     }
@@ -36,19 +37,20 @@ function mockQuery(initial) {
         destination: params[3],
         material: params[4],
         operator_name: params[5],
-        tare_weight: params[6],
-        gross_weight: params[7],
-        timestamp_in: params[8],
-        timestamp_out: params[9],
-        ticket_status: params[10],
-        status: params[11],
-        rfid_tag: params[12],
-        transporter: params[13],
-        vehicle_type: params[14],
-        synced_to_local: params[15],
-        release_at: params[16],
-        synced_at: params[17],
-        mcg_status: params[18],
+        company: params[6],
+        tare_weight: params[7],
+        gross_weight: params[8],
+        timestamp_in: params[9],
+        timestamp_out: params[10],
+        ticket_status: params[11],
+        status: params[12],
+        rfid_tag: params[13],
+        transporter: params[14],
+        vehicle_type: params[15],
+        synced_to_local: params[16],
+        release_at: params[17],
+        synced_at: params[18],
+        mcg_status: params[19],
       };
       return { rows: [current] };
     }
@@ -113,6 +115,7 @@ test('update keeps Waiting hold when close time stays in the future', async () =
   );
 
   assert.equal(out.trip.truck_number, 'HR38AL2222');
+  assert.equal(out.trip.company, 'MKG GREEN ENERGY');
   assert.equal(out.trip.mcg_status, 'waiting');
   assert.equal(out.trip.synced_to_local, true);
   assert.equal(out.needsLocalEdit, false);

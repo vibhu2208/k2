@@ -69,6 +69,12 @@ const ENV_DEFAULTS = Object.freeze({
   WEIGHT_ADJUSTMENT_FEATURE_START_AT: '',
   WEIGHT_ADJUSTMENT_AUTO_DISABLE_DAYS: '3',
   WEIGHT_ADJUSTMENT_AUTO_DISABLE_MINUTES: '',
+  /** Advance Setting → Engineering console access code. */
+  ENGINEERING_ACCESS_CODE: '0021',
+  /** Advance Setting → weight offset / manual-entry unlock code. */
+  WEIGHT_OFFSET_ACCESS_CODE: '9988',
+  /** Show "Enter vehicle manually" on weighment screen (admin / advance reversible). */
+  MANUAL_VEHICLE_ENTRY_ENABLED: 'false',
   AWS_ACCESS_KEY_ID: '',
   AWS_SECRET_ACCESS_KEY: '',
   AWS_REGION: 'eu-north-1',
@@ -87,7 +93,7 @@ const ENV_DEFAULTS = Object.freeze({
   DAILY_REPORT_MAIL_ENABLED: 'false',
   DAILY_REPORT_MAIL_CRON: '45 0 * * *',
   DAILY_REPORT_MAIL_TIMEZONE: 'Asia/Kolkata',
-  DAILY_REPORT_MAIL_INCLUDE_TRIP_PDF: 'true',
+  DAILY_REPORT_MAIL_INCLUDE_TRIP_PDF: 'false',
   DAILY_REPORT_MAIL_RETRY_MS: '300000',
 });
 

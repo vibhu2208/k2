@@ -238,6 +238,14 @@ async function bootstrapBackend() {
     await tryInvoke('startWeightAdjustmentAutoDisable', () => weightAdjustment.start());
   }
 
+  const offsetAudit = safeRequire(
+    '../backend/services/WeightOffsetAuditService',
+    'WeightOffsetAuditService',
+  );
+  if (offsetAudit && typeof offsetAudit.cleanupLegacyExcelFiles === 'function') {
+    await tryInvoke('cleanupLegacyOffsetExcel', () => offsetAudit.cleanupLegacyExcelFiles());
+  }
+
   const print = safeRequire('../backend/services/PrintService', 'PrintService');
   if (print && typeof print.processReprintQueue === 'function') {
     await tryInvoke('processReprintQueue', () => print.processReprintQueue());

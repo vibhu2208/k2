@@ -176,11 +176,15 @@ export const settingsAPI = makeProxy('settings', [
 
 export const authAPI = makeProxy('auth', [
   'verifyPin',
+  'verifyAdvanceGate',
   'lockAdvanced',
   'getSession',
   'verifyManualHywaPin',
   'lockManualHywaClose',
   'getManualHywaCloseSession',
+  'verifyEngineeringPin',
+  'lockEngineeringConsole',
+  'getEngineeringSession',
 ]);
 
 export const workflowAPI = makeProxy('workflow', [

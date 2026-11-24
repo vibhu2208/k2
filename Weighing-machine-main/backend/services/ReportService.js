@@ -253,20 +253,39 @@ function summarise(rows) {
   };
 }
 
-function getCompanySettings(ticketCompany) {
+function isRemoteTripRow(row) {
+  return !!(row && String(row.remote_pg_id || '').trim());
+}
+
+function getCompanySettings(ticketCompany, row) {
+  // Remote trips always brand as MKG GREEN ENERGY (no DCC in header).
+  if (isRemoteTripRow(row)) {
+    ticketCompany = 'MKG GREEN ENERGY';
+  }
+  const code = String(ticketCompany || '').trim().toUpperCase();
   const base = {
     name: SettingsService.get('COMPANY_NAME') || process.env.COMPANY_NAME || 'MUNICIPAL CORPORATION GURUGRAM',
     address: SettingsService.get('COMPANY_ADDRESS') || '',
     phone: SettingsService.get('COMPANY_PHONE') || '',
-    siteName: SettingsService.get('SITE_NAME') || SettingsService.get('COMPANY_ADDRESS') || 'BANDHWARI SLF SITE GURURAM (HARYANA)',
-    weighbridgeId: SettingsService.get('WEIGHBRIDGE_ID') || process.env.WEIGHBRIDGE_ID || 'WB - 03',
-    reportCompanyName: SettingsService.get('REPORT_COMPANY_NAME') || process.env.REPORT_COMPANY_NAME || 'MKG GREEN ENERGY',
+    siteName:
+      SettingsService.get('SITE_NAME') ||
+      SettingsService.get('COMPANY_ADDRESS') ||
+      'BANDHWARI SLF SITE GURURAM (HARYANA)',
+    weighbridgeId: SettingsService.get('WEIGHBRIDGE_ID') || process.env.WEIGHBRIDGE_ID || 'WB-04',
+    reportCompanyName:
+      SettingsService.get('REPORT_COMPANY_NAME') ||
+      process.env.REPORT_COMPANY_NAME ||
+      'MKG GREEN ENERGY',
     logoPath: SettingsService.get('REPORT_LOGO_PATH') || process.env.REPORT_LOGO_PATH || '',
   };
-  return brandCompanyForTicket(base, ticketCompany);
+  // DCC tickets still print MKG GREEN ENERGY (and strip DCC from site header).
+  if (code === 'DCC') {
+    return brandCompanyForTicket(base, 'MKG GREEN ENERGY');
+  }
+  return brandCompanyForTicket(base, code || 'MKG GREEN ENERGY');
 }
 
-/** Header branding for multi-row exports: MKG only when filter/all rows are MKG. */
+/** Header branding for multi-row exports: MKG GREEN ENERGY when filter/all rows are MKG brand. */
 function getCompanySettingsForRows(rows = [], filterCompany) {
   if (filterCompany && filterCompany !== 'all') {
     return getCompanySettings(filterCompany);
@@ -274,11 +293,14 @@ function getCompanySettingsForRows(rows = [], filterCompany) {
   const codes = [
     ...new Set(
       rows
-        .map((r) => String(r.company || '').trim().toUpperCase())
+        .map((r) => {
+          if (isRemoteTripRow(r)) return 'MKG GREEN ENERGY';
+          return String(r.company || '').trim().toUpperCase();
+        })
         .filter(Boolean),
     ),
   ];
-  if (codes.length === 1) return getCompanySettings(codes[0]);
+  if (codes.length === 1) return getCompanySettings(codes[0], rows[0]);
   return getCompanySettings();
 }
 
@@ -287,7 +309,17 @@ function getSourceLocation() {
 }
 
 function enrichReportRow(row) {
-  return normalizeReportRow(row);
+  const normalized = normalizeReportRow(row);
+  if (!normalized) return normalized;
+  // Remote trips and legacy DCC / Daya Charan rows → MKG GREEN ENERGY on reports.
+  if (isRemoteTripRow(normalized)) {
+    return { ...normalized, company: 'MKG GREEN ENERGY' };
+  }
+  const code = String(normalized.company || '').trim().toUpperCase();
+  if (!code || code === 'DCC' || /DAYA\s*CHARAN/i.test(String(normalized.company || ''))) {
+    return { ...normalized, company: 'MKG GREEN ENERGY' };
+  }
+  return normalized;
 }
 
 function writeReportPdfBuffer(pdf, filenameBase) {
@@ -306,13 +338,20 @@ function closedRowsForExport(rows = []) {
   return rows.filter(isClosedTrip);
 }
 
-function rowToExportValues(row, company) {
-  const settings = getCompanySettings(row.company);
-  // Prefer ticket branding; fall back to caller company only when ticket has none.
-  const reportCompanyName =
+function companyNameForExcel(row, company) {
+  if (isRemoteTripRow(row)) return 'MKG GREEN ENERGY';
+  const settings = getCompanySettings(row.company, row);
+  const raw =
     settings.reportCompanyName ||
     company?.reportCompanyName ||
     'MKG GREEN ENERGY';
+  if (/DAYA\s*CHARAN/i.test(String(raw))) return 'MKG GREEN ENERGY';
+  if (String(row.company || '').trim().toUpperCase() === 'DCC') return 'MKG GREEN ENERGY';
+  return String(raw || 'MKG GREEN ENERGY').trim() || 'MKG GREEN ENERGY';
+}
+
+function rowToExportValues(row, company) {
+  const reportCompanyName = companyNameForExcel(row, company);
   const gross = splitDateTime(grossWeightTimestamp(row));
   const tare = splitDateTime(tareWeightTimestamp(row));
   const net = splitDateTime(reportListingTimestamp(row));
@@ -555,7 +594,7 @@ const ReportService = {
     }
     const row = enrichReportRow(txn);
     const html = await buildVehicleReportHtml([row], {
-      company: getCompanySettings(row.company),
+      company: getCompanySettings(row.company, row),
     });
     return { ok: true, html, transactionId, slip_number: row.slip_number };
   },

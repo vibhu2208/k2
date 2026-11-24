@@ -16,10 +16,12 @@ const syncRoutes = require('./routes/sync');
 const mediaRoutes = require('./routes/media');
 const remoteTripsRoutes = require('./routes/remoteTrips');
 const slipReservationsRoutes = require('./routes/slipReservations');
+const offsetAuditRoutes = require('./routes/offsetAudit');
 const {
   ensureSchema: ensureSlipReservationsSchema,
   startFireWorker,
 } = require('./services/slipReservationService');
+const { ensureSchema: ensureOffsetAuditSchema } = require('./services/offsetAuditService');
 const {
   startMirrorReconcileWorker,
   startOutTimeReleaseWorker,
@@ -99,6 +101,7 @@ app.use('/sync', syncRoutes);
 app.use('/media', mediaRoutes);
 app.use('/remote-trips', heavyLimiter, remoteTripsRoutes);
 app.use('/slip-reservations', slipReservationsRoutes);
+app.use('/offset-audit', offsetAuditRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error('[api] error', err);
@@ -127,6 +130,15 @@ async function bootstrap() {
   } catch (err) {
     console.error(
       '[api] slip_reservations setup failed — run scripts/rds/003_slip_reservations.sql:',
+      err.message,
+    );
+  }
+  try {
+    await ensureOffsetAuditSchema();
+    console.log('[api] weight_offset_audit_mirror schema ready');
+  } catch (err) {
+    console.error(
+      '[api] offset audit schema failed — run scripts/rds/005_weight_offset_audit_mirror.sql:',
       err.message,
     );
   }

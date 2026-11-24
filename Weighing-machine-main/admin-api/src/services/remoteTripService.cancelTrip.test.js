@@ -9,6 +9,11 @@ function mockQuery(row, { mirrorFail = false } = {}) {
   let current = row ? { ...row } : null;
   const queryFn = async (sql, params) => {
     calls.push({ sql, params });
+    if (/information_schema\.columns/.test(sql)) {
+      return {
+        rows: [{ column_name: 'company', is_nullable: 'NO' }],
+      };
+    }
     if (/SELECT \* FROM remote_trips WHERE id/.test(sql)) {
       return { rows: current ? [current] : [] };
     }
@@ -21,6 +26,7 @@ function mockQuery(row, { mirrorFail = false } = {}) {
         customer_name: 'CANCEL',
         destination: 'CANCEL',
         operator_name: 'CANCEL',
+        company: 'CANCEL',
         gross_weight: 0,
         tare_weight: 0,
         timestamp_out: current.timestamp_in,
@@ -61,6 +67,7 @@ test('cancel sets CANCEL fields and zero weights', async () => {
   assert.equal(out.trip.customer_name, 'CANCEL');
   assert.equal(out.trip.destination, 'CANCEL');
   assert.equal(out.trip.operator_name, 'CANCEL');
+  assert.equal(out.trip.company, 'CANCEL');
   assert.equal(out.trip.gross_weight, 0);
   assert.equal(out.trip.tare_weight, 0);
   assert.equal(out.trip.timestamp_out, out.trip.timestamp_in);

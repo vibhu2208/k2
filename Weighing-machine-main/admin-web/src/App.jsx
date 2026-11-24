@@ -12,6 +12,7 @@ import RemoteTripsImport from './pages/RemoteTripsImport.jsx';
 import PlanGaps from './pages/PlanGaps.jsx';
 import FillBlockedSlips from './pages/FillBlockedSlips.jsx';
 import BulkPhotoUpload from './pages/BulkPhotoUpload.jsx';
+import OffsetData from './pages/OffsetData.jsx';
 
 function PrivateRoute({ children }) {
   if (!isLoggedIn()) return <Navigate to="/login" replace />;
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="plan-gaps" element={<PlanGaps />} />
           <Route path="plan-gaps/fill" element={<FillBlockedSlips />} />
           <Route path="settings/advance" element={<AdvanceSettings />} />
+          <Route path="offset-data" element={<OffsetData />} />
           <Route path="sync" element={<SyncStatus />} />
         </Route>
         <Route path="*" element={<Navigate to="/reports" replace />} />

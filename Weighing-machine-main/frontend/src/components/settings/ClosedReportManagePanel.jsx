@@ -30,7 +30,7 @@ function buildEditForm(report) {
     customer_name: report?.customer_name || '',
     destination: report?.destination || '',
     operator_name: report?.operator_name || '',
-    company: report?.company || 'DCC',
+    company: report?.company || 'MKG GREEN ENERGY',
   };
 }
 
@@ -43,7 +43,7 @@ export default function ClosedReportManagePanel() {
   const [customers, setCustomers] = useState([]);
   const [destinations, setDestinations] = useState([]);
   const [operators, setOperators] = useState([]);
-  const [companies, setCompanies] = useState(['DCC', 'MKG']);
+  const [companies, setCompanies] = useState(['MKG GREEN ENERGY', 'DCC']);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -72,7 +72,7 @@ export default function ClosedReportManagePanel() {
         setCustomers(c || []);
         setDestinations(d || []);
         setOperators(o || []);
-        setCompanies(Array.isArray(companiesList) && companiesList.length ? companiesList : ['DCC', 'MKG']);
+        setCompanies(Array.isArray(companiesList) && companiesList.length ? companiesList : ['MKG GREEN ENERGY', 'DCC']);
       })
       .catch(() => {});
   }, [refreshRecent]);
@@ -138,7 +138,7 @@ export default function ClosedReportManagePanel() {
         customer_name: form.customer_name.trim(),
         destination: form.destination.trim(),
         operator_name: form.operator_name.trim(),
-        company: form.company.trim() || 'DCC',
+        company: form.company.trim() || 'MKG GREEN ENERGY',
       });
 
       if (result?.ok === false) {

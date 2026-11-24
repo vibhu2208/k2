@@ -9,6 +9,8 @@ const PLATE_RE = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$/;
 const SLIP_RE = /^WB[0-9]+$/;
 const MAX_WEIGHT_KG = 200000;
 const CANCEL_LABEL = 'CANCEL';
+/** Fixed company on remote trips (matches weighbridge RemoteTripSyncService / report UI). */
+const REMOTE_TRIP_COMPANY = 'MKG GREEN ENERGY';
 
 function isCancelToken(value) {
   return compactToken(value) === CANCEL_LABEL;
@@ -318,6 +320,8 @@ function buildCreatePayload(body = {}, lists = {}) {
     destination: values.destination,
     material: values.material,
     operator_name: values.operator_name,
+    // Always MKG GREEN ENERGY for remote trips (UI is fixed; PC sync expects this).
+    company: cancelled ? CANCEL_LABEL : REMOTE_TRIP_COMPANY,
     tare_weight: values.tare_weight,
     gross_weight: values.gross_weight,
     timestamp_in: values.timestamp_in,
@@ -582,6 +586,19 @@ async function ensureOpenTicketColumns(queryFn) {
   openTicketColumnsReady = true;
 }
 
+let companyColumnReady = false;
+/** Persist fixed remote-trip company so weighbridge import always receives MKG GREEN ENERGY. */
+async function ensureCompanyColumn(queryFn) {
+  if (companyColumnReady) return;
+  const cols = await loadRemoteTripColumns(queryFn);
+  if (!cols.has('company')) {
+    await runRemoteTripDdl([
+      `ALTER TABLE remote_trips ADD COLUMN IF NOT EXISTS company TEXT NOT NULL DEFAULT '${REMOTE_TRIP_COMPANY}'`,
+    ]);
+  }
+  companyColumnReady = true;
+}
+
 function isHeldUntilOutTime(row) {
   if (!row?.release_at) return false;
   const at = new Date(row.release_at).getTime();
@@ -652,6 +669,7 @@ function startOutTimeReleaseWorker(queryFn, intervalMs = 15000) {
 async function createRemoteTrip(queryFn, body = {}, options = {}) {
   await ensureReleaseColumn(queryFn);
   await ensureOpenTicketColumns(queryFn);
+  await ensureCompanyColumn(queryFn);
   const lists = options.lists || (await loadMasterLists());
   const data = buildCreatePayload(body, lists);
   const forceReplace = Boolean(body.replace_existing || body.force_replace);
@@ -1439,6 +1457,7 @@ async function resyncRemoteTrip(queryFn, id) {
 async function updateRemoteTrip(queryFn, id, body = {}, options = {}) {
   await ensureReleaseColumn(queryFn);
   await ensureOpenTicketColumns(queryFn);
+  await ensureCompanyColumn(queryFn);
 
   const existing = await getRemoteTrip(queryFn, id);
   if (!existing) {
@@ -1527,25 +1546,26 @@ async function updateRemoteTrip(queryFn, id, body = {}, options = {}) {
     'destination = $4',
     'material = $5',
     'operator_name = $6',
-    'tare_weight = $7',
-    'gross_weight = $8',
-    'timestamp_in = $9',
-    'timestamp_out = $10',
-    'ticket_status = $11',
-    'status = $12',
-    'rfid_tag = $13',
-    'transporter = $14',
-    'vehicle_type = $15',
-    'synced_to_local = $16',
-    'release_at = $17',
-    'synced_at = $18',
-    'mcg_status = $19',
-    'arrival_photo_1 = $20',
-    'arrival_photo_2 = $21',
-    'arrival_photo_3 = $22',
-    'departure_photo_1 = $23',
-    'departure_photo_2 = $24',
-    'departure_photo_3 = $25',
+    'company = $7',
+    'tare_weight = $8',
+    'gross_weight = $9',
+    'timestamp_in = $10',
+    'timestamp_out = $11',
+    'ticket_status = $12',
+    'status = $13',
+    'rfid_tag = $14',
+    'transporter = $15',
+    'vehicle_type = $16',
+    'synced_to_local = $17',
+    'release_at = $18',
+    'synced_at = $19',
+    'mcg_status = $20',
+    'arrival_photo_1 = $21',
+    'arrival_photo_2 = $22',
+    'arrival_photo_3 = $23',
+    'departure_photo_1 = $24',
+    'departure_photo_2 = $25',
+    'departure_photo_3 = $26',
   ];
 
   const res = await queryFn(
@@ -1560,6 +1580,7 @@ async function updateRemoteTrip(queryFn, id, body = {}, options = {}) {
       data.destination,
       data.material,
       data.operator_name,
+      data.company || REMOTE_TRIP_COMPANY,
       data.tare_weight,
       data.gross_weight,
       data.timestamp_in,
@@ -1619,6 +1640,7 @@ async function cancelRemoteTrip(
   id,
   { siteId = getSiteId(), allowAlreadyCancelled = false } = {},
 ) {
+  await ensureCompanyColumn(queryFn);
   const row = await getRemoteTrip(queryFn, id);
   if (!row) {
     const err = new Error('Remote trip not found');
@@ -1653,6 +1675,7 @@ async function cancelRemoteTrip(
          customer_name = $2,
          destination = $2,
          operator_name = $2,
+         company = $2,
          truck_number = $3,
          gross_weight = 0,
          tare_weight = 0,
@@ -1708,6 +1731,7 @@ async function deleteRemoteTrip(queryFn, id, { siteId = getSiteId() } = {}) {
 }
 
 module.exports = {
+  REMOTE_TRIP_COMPANY,
   buildCreatePayload,
   validateRemoteTripFields,
   createRemoteTrip,

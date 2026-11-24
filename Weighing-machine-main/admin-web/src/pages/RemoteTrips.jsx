@@ -782,6 +782,8 @@ export default function RemoteTrips() {
       const payload = {
         ...form,
         ticket_status: open ? 'OPEN' : 'CLOSED',
+        // Fixed for remote trips — matches weighbridge import / report Company_Name.
+        company: 'MKG GREEN ENERGY',
         slip_number: chosenSlip,
         reservation_id: isEdit ? undefined : form.reservation_id || undefined,
         replace_existing: isEdit ? false : Boolean(form.replace_existing),

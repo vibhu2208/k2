@@ -28,6 +28,7 @@ const REMOTE_SAFE_KEYS = new Set([
   'WEIGHT_ADJUSTMENT_FEATURE_START_AT',
   'WEIGHT_ADJUSTMENT_AUTO_DISABLE_DAYS',
   'WEIGHT_ADJUSTMENT_AUTO_DISABLE_MINUTES',
+  'MANUAL_VEHICLE_ENTRY_ENABLED',
   'COMPANY_NAME',
   'COMPANY_ADDRESS',
   'COMPANY_PHONE',
@@ -462,7 +463,136 @@ async function applyCommand(row) {
     logger.info('CloudAdminSync sync_open_tickets command done', result);
     return;
   }
+  if (row.type === 'fetch_offset_audit') {
+    const result = await pushOffsetAuditMirror(payload);
+    logger.info('CloudAdminSync fetch_offset_audit command done', result);
+    return;
+  }
   throw new Error(`Unknown command type: ${row.type}`);
+}
+
+/**
+ * Push local weight_offset_audit rows into RDS mirror for the admin Offset Data tab.
+ * Does not write Excel files on the PC.
+ */
+async function pushOffsetAuditMirror(payload = {}) {
+  const WeightOffsetAuditService = require('./WeightOffsetAuditService');
+  const from = payload.from || null;
+  const to = payload.to || null;
+  const rows = WeightOffsetAuditService.listDetailed({ limit: null, from, to });
+  const siteId = getSiteId();
+  const syncedAt = new Date().toISOString();
+
+  await pg.query(`
+    CREATE TABLE IF NOT EXISTS weight_offset_audit_mirror (
+      id                 TEXT PRIMARY KEY,
+      site_id            TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+      transaction_id     TEXT,
+      slip_number        TEXT,
+      truck_number       TEXT NOT NULL,
+      rfid_tag           TEXT,
+      vehicle_type       TEXT,
+      pass               TEXT,
+      offset_kg          REAL NOT NULL,
+      offset_tons        REAL NOT NULL,
+      raw_weight_kg      REAL,
+      adjusted_weight_kg REAL,
+      operator_name      TEXT,
+      created_at         TIMESTAMPTZ NOT NULL,
+      gross_weight       REAL,
+      tare_weight        REAL,
+      net_weight         REAL,
+      material           TEXT,
+      customer_name      TEXT,
+      destination        TEXT,
+      company            TEXT,
+      ticket_status      TEXT,
+      synced_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pg.query(`
+    CREATE INDEX IF NOT EXISTS idx_weight_offset_audit_mirror_site_created
+      ON weight_offset_audit_mirror (site_id, created_at DESC)
+  `);
+
+  for (const row of rows) {
+    await pg.query(
+      `INSERT INTO weight_offset_audit_mirror (
+         id, site_id, transaction_id, slip_number, truck_number, rfid_tag,
+         vehicle_type, pass, offset_kg, offset_tons, raw_weight_kg, adjusted_weight_kg,
+         operator_name, created_at, gross_weight, tare_weight, net_weight,
+         material, customer_name, destination, company, ticket_status, synced_at
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
+       )
+       ON CONFLICT (id) DO UPDATE SET
+         site_id = EXCLUDED.site_id,
+         transaction_id = EXCLUDED.transaction_id,
+         slip_number = EXCLUDED.slip_number,
+         truck_number = EXCLUDED.truck_number,
+         rfid_tag = EXCLUDED.rfid_tag,
+         vehicle_type = EXCLUDED.vehicle_type,
+         pass = EXCLUDED.pass,
+         offset_kg = EXCLUDED.offset_kg,
+         offset_tons = EXCLUDED.offset_tons,
+         raw_weight_kg = EXCLUDED.raw_weight_kg,
+         adjusted_weight_kg = EXCLUDED.adjusted_weight_kg,
+         operator_name = EXCLUDED.operator_name,
+         created_at = EXCLUDED.created_at,
+         gross_weight = EXCLUDED.gross_weight,
+         tare_weight = EXCLUDED.tare_weight,
+         net_weight = EXCLUDED.net_weight,
+         material = EXCLUDED.material,
+         customer_name = EXCLUDED.customer_name,
+         destination = EXCLUDED.destination,
+         company = EXCLUDED.company,
+         ticket_status = EXCLUDED.ticket_status,
+         synced_at = EXCLUDED.synced_at`,
+      [
+        row.id,
+        siteId,
+        row.transaction_id,
+        row.slip_number,
+        row.truck_number,
+        row.rfid_tag,
+        row.vehicle_type,
+        row.pass,
+        row.offset_kg,
+        row.offset_tons,
+        row.raw_weight_kg,
+        row.adjusted_weight_kg,
+        row.operator_name,
+        row.created_at,
+        row.gross_weight,
+        row.tare_weight,
+        row.net_weight,
+        row.material,
+        row.customer_name,
+        row.destination,
+        row.company,
+        row.ticket_status,
+        syncedAt,
+      ],
+    );
+  }
+
+  // Not in REMOTE_SAFE_KEYS — PC ignores this on pull; admin UI reads it.
+  await pg.query(
+    `INSERT INTO site_settings (site_id, key, value, updated_at)
+     VALUES ($1, 'WEIGHT_OFFSET_AUDIT_LAST_FETCH_AT', $2, now())
+     ON CONFLICT (site_id, key) DO UPDATE
+       SET value = EXCLUDED.value, updated_at = now()`,
+    [siteId, syncedAt],
+  );
+  await pg.query(
+    `INSERT INTO site_settings (site_id, key, value, updated_at)
+     VALUES ($1, 'WEIGHT_OFFSET_AUDIT_LAST_FETCH_COUNT', $2, now())
+     ON CONFLICT (site_id, key) DO UPDATE
+       SET value = EXCLUDED.value, updated_at = now()`,
+    [siteId, String(rows.length)],
+  );
+
+  return { count: rows.length, syncedAt };
 }
 
 async function pullCommands() {

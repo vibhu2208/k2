@@ -33,6 +33,7 @@ const migration017 = require('./migrations/017_backfill_hywa_photo_columns');
 const migration018 = require('./migrations/018_soft_delete_tickets');
 const migration019 = require('./migrations/019_ticket_company');
 const migration020 = require('./migrations/020_clear_rfid_epc_prefix');
+const migration021 = require('./migrations/021_weight_offset_audit');
 
 let db = null;
 
@@ -74,6 +75,7 @@ function runMigrations(handle = db) {
     migration018,
     migration019,
     migration020,
+    migration021,
   ];
 
   const apply = handle.transaction(() => {
@@ -123,6 +125,32 @@ function ensureDefaultAdmin(handle = db) {
   logger.info('Default admin operator created', { pin: '4916' });
 }
 
+/**
+ * One-time: hide "Enter vehicle manually" until Advance Setting enables it.
+ * Clears legacy .env/DB defaults of true without overriding later admin toggles.
+ */
+function ensureManualVehicleEntryOffByDefault(handle = db) {
+  if (!handle) return;
+  try {
+    const flag = handle
+      .prepare(`SELECT value FROM settings WHERE key = ? LIMIT 1`)
+      .get('MANUAL_VEHICLE_ENTRY_DEFAULT_OFF_V1');
+    if (flag && String(flag.value || '').trim()) return;
+
+    const now = ts.now();
+    const upsert = handle.prepare(
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    );
+    upsert.run('MANUAL_VEHICLE_ENTRY_ENABLED', 'false', now);
+    upsert.run('MANUAL_VEHICLE_ENTRY_DEFAULT_OFF_V1', '1', now);
+    logger.info('Manual vehicle entry defaulted off until Advance Setting enables it');
+  } catch (err) {
+    logger.warn('ensureManualVehicleEntryOffByDefault failed', { message: err.message });
+  }
+}
+
 /** Open (or create) the SQLite database. Returns the singleton. */
 function initDatabase() {
   if (db) return db;
@@ -148,6 +176,7 @@ function initDatabase() {
 
     runMigrations(db);
     ensureDefaultAdmin(db);
+    ensureManualVehicleEntryOffByDefault(db);
 
     try {
       const TransactionService = require('../services/TransactionService');

@@ -36,25 +36,58 @@ function writeJsonSafe(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
 }
 
-function getCompanySettings(ticketCompany) {
+function isMkgGreensCompany(ticketCompany) {
+  const code = String(ticketCompany || '').trim().toUpperCase();
+  return (
+    code === 'MKG' ||
+    code === 'MKG GREENS' ||
+    code === 'MKG GREEN ENERGY' ||
+    code === 'MKG ENERGY' ||
+    code.includes('MKG')
+  );
+}
+
+function getCompanySettings(ticketCompany, row) {
+  // Remote trips always print as MKG GREEN ENERGY (never DCC in header).
+  if (row && String(row.remote_pg_id || '').trim()) {
+    ticketCompany = 'MKG GREEN ENERGY';
+  }
+  const code = String(ticketCompany || '').trim().toUpperCase();
   const base = {
     name: SettingsService.get('COMPANY_NAME') || process.env.COMPANY_NAME || 'MUNICIPAL CORPORATION GURUGRAM',
     address: SettingsService.get('COMPANY_ADDRESS') || '',
     phone: SettingsService.get('COMPANY_PHONE') || '',
     siteName: SettingsService.get('SITE_NAME') || 'BANDHWARI SLF SITE GURURAM (HARYANA)',
-    weighbridgeId: SettingsService.get('WEIGHBRIDGE_ID') || process.env.WEIGHBRIDGE_ID || 'WB - 03',
+    weighbridgeId: SettingsService.get('WEIGHBRIDGE_ID') || process.env.WEIGHBRIDGE_ID || 'WB-04',
     operator: SettingsService.get('DEFAULT_OPERATOR') || 'Operator',
+    reportCompanyName: 'MKG GREEN ENERGY',
+    headerBrandName: 'MKG GREEN ENERGY',
   };
-  const code = String(ticketCompany || '').trim().toUpperCase();
-  if (code !== 'MKG') return base;
 
-  let siteName = String(base.siteName || '');
-  if (/\bDCC\b/i.test(siteName)) {
-    siteName = siteName.replace(/\bDCC\b/gi, 'MKG');
-  } else if (!/\bMKG\b/i.test(siteName)) {
-    siteName = `${siteName.replace(/\s+$/, '')} MKG`;
+  const cleanSite = (value) => {
+    let siteName = String(value || 'BANDHWARI SLF SITE GURURAM (HARYANA)')
+      .replace(/\bDCC\b/gi, '')
+      .replace(/\bDAYA\s*CHARAN\b/gi, '')
+      .replace(/\bMKG\s+GREEN\s+ENERGY\b/gi, '')
+      .replace(/\bMKG\s+GREENS\b/gi, '')
+      .replace(/\bMKG\s+ENERGY\b/gi, '')
+      .replace(/\bMKG\b/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (!siteName) siteName = 'BANDHWARI SLF SITE GURURAM (HARYANA)';
+    return siteName;
+  };
+
+  if (code === 'DCC' || isMkgGreensCompany(code) || !code) {
+    return {
+      ...base,
+      siteName: cleanSite(base.siteName),
+      reportCompanyName: 'MKG GREEN ENERGY',
+      headerBrandName: 'MKG GREEN ENERGY',
+    };
   }
-  return { ...base, siteName };
+
+  return { ...base, siteName: cleanSite(base.siteName) };
 }
 
 function formatKg(n) {
@@ -72,7 +105,7 @@ function slipPaths(transactionId, date) {
 }
 
 function buildSlipData(transaction) {
-  const company = getCompanySettings(transaction?.company);
+  const company = getCompanySettings(transaction?.company, transaction);
   return {
     company,
     slip_number: transaction.slip_number,
@@ -106,7 +139,7 @@ function buildSlipHtml(slip) {
   .footer { margin-top: 24px; text-align: center; color: #666; font-size: 11px; }
 </style></head><body>
   <h1>${c.name}</h1>
-  <p class="sub">${c.siteName || c.address || ''}<br/>${c.weighbridgeId || ''}${c.phone ? `<br/>Tel: ${c.phone}` : ''}</p>
+  <p class="sub">${c.siteName || c.address || ''}${c.headerBrandName ? `<br/>${c.headerBrandName}` : ''}<br/>${c.weighbridgeId || ''}${c.phone ? `<br/>Tel: ${c.phone}` : ''}</p>
   <hr/>
   <div class="slip-no">Slip ${slip.slip_number || '—'}</div>
   <table>

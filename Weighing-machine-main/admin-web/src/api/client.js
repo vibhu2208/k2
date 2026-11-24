@@ -187,6 +187,18 @@ export const api = {
     });
   },
 
+  getOffsetAudit(params = {}) {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/offset-audit${qs ? `?${qs}` : ''}`);
+  },
+
+  fetchOffsetAudit(body = {}) {
+    return request('/offset-audit/fetch', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
   getSyncStatus() {
     return request('/sync/status');
   },

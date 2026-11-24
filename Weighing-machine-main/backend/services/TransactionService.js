@@ -449,7 +449,8 @@ const TransactionService = {
         data.customer_name || null,
         data.destination || null,
         data.operator_name || null,
-        data.company || 'DCC',
+        // Remote imports default to MKG GREEN ENERGY (same as RemoteTripSyncService).
+        String(data.company || '').trim() || 'MKG GREEN ENERGY',
         data.arrival_photo_1 || null,
         data.arrival_photo_2 || null,
         data.arrival_photo_3 || null,
@@ -584,7 +585,8 @@ const TransactionService = {
         data.customer_name || null,
         data.destination || null,
         data.operator_name || null,
-        data.company || 'DCC',
+        // Remote imports default to MKG GREEN ENERGY (same as RemoteTripSyncService).
+        String(data.company || '').trim() || 'MKG GREEN ENERGY',
         data.arrival_photo_1 || null,
         data.arrival_photo_2 || null,
         data.arrival_photo_3 || null,

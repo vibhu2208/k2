@@ -14,7 +14,7 @@ import {
 } from '../api/ipc.js';
 import RfidPowerControl from '../components/settings/RfidPowerControl.jsx';
 import CameraSlotsEditor from '../components/settings/CameraSlotsEditor.jsx';
-import ManualHywaClosePanel from '../components/settings/ManualHywaClosePanel.jsx';
+import EngineeringConsolePanel from '../components/settings/EngineeringConsolePanel.jsx';
 
 const IPV4 =
   /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?!$)|$)){4}$/;
@@ -260,8 +260,13 @@ const FIELDS = {
     },
   ],
   advance: [
-    { key: 'WEIGHT_ADJUSTMENT_ENABLED', label: 'Enable weight increase', type: 'toggle' },
-    { key: 'WEIGHT_OFFSET_KG', label: 'Increase loaded truck weight by (kg)', type: 'number' },
+    { key: 'WEIGHT_ADJUSTMENT_ENABLED', label: 'Enable weight increase', type: 'toggle', weightOnly: true },
+    { key: 'WEIGHT_OFFSET_KG', label: 'Increase loaded truck weight by (kg)', type: 'number', weightOnly: true },
+    {
+      key: 'MANUAL_VEHICLE_ENTRY_ENABLED',
+      label: 'Show “Enter vehicle manually” button',
+      type: 'toggle',
+    },
   ],
   printer: [
     { key: 'PRINTER_NAME', label: 'Default printer', type: 'text' },
@@ -302,8 +307,8 @@ export default function Settings() {
   const [restoreBusy, setRestoreBusy] = useState(false);
   const [showRestore, setShowRestore] = useState(false);
   const [thermalQueue, setThermalQueue] = useState([]);
-  const [advanceUnlocked, setAdvanceUnlocked] = useState(false);
-  const [adminPin, setAdminPin] = useState('');
+  const [advanceMode, setAdvanceMode] = useState(null); // null | 'offset' | 'engineering'
+  const [advancePin, setAdvancePin] = useState('');
   const [advanceError, setAdvanceError] = useState('');
   const [advanceMessage, setAdvanceMessage] = useState('');
   const timers = useRef({});
@@ -446,23 +451,27 @@ export default function Settings() {
   }
 
   const weightFeatureAvailable = values.WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE !== 'false';
-  const advanceWeightFields = weightFeatureAvailable ? FIELDS.advance : [];
+  const advanceFields = FIELDS.advance.filter(
+    (f) => !f.weightOnly || weightFeatureAvailable,
+  );
 
   async function unlockAdvanceSetting() {
     setAdvanceError('');
     try {
-      const result = await authAPI.verifyPin(adminPin);
+      const result = await authAPI.verifyAdvanceGate(advancePin);
       if (!result?.ok) {
-        setAdvanceError(result?.error || 'Invalid admin PIN');
+        setAdvanceError(result?.error || 'Invalid password');
         return;
       }
-      setAdvanceUnlocked(true);
-      setAdminPin('');
-      const all = await settingsAPI.getAll().catch(() => null);
-      if (all) {
-        setValues((v) => ({ ...v, ...all }));
-      }
-      if (all?.WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE !== 'false') {
+      const mode = result.mode === 'engineering' ? 'engineering' : 'offset';
+      setAdvanceMode(mode);
+      setAdvancePin('');
+
+      if (mode === 'offset') {
+        const all = await settingsAPI.getAll().catch(() => null);
+        if (all) {
+          setValues((v) => ({ ...v, ...all }));
+        }
         const keys = FIELDS.advance.map((f) => f.key);
         const loaded = {};
         await Promise.all(
@@ -481,11 +490,12 @@ export default function Settings() {
     try {
       await authAPI.lockAdvanced();
       await authAPI.lockManualHywaClose();
+      await authAPI.lockEngineeringConsole();
     } catch (_e) {
       /* ignore */
     }
-    setAdvanceUnlocked(false);
-    setAdminPin('');
+    setAdvanceMode(null);
+    setAdvancePin('');
     setAdvanceError('');
     setValues((v) => {
       const next = { ...v };
@@ -1227,29 +1237,35 @@ export default function Settings() {
       </Card>
 
       <Card title="Advance Setting">
-        {!advanceUnlocked ? (
+        {!advanceMode ? (
           <div className="space-y-2">
             <div className="flex items-center gap-2 max-w-xs">
               <input
                 type="password"
-                className="field-input flex-1 text-sm"
-                value={adminPin}
-                onChange={(e) => setAdminPin(e.target.value)}
+                className="field-input flex-1 text-sm font-mono"
+                value={advancePin}
+                onChange={(e) => setAdvancePin(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && unlockAdvanceSetting()}
-                aria-label="Admin PIN"
+                aria-label="Advance Setting password"
+                placeholder="Password"
                 autoComplete="off"
                 spellCheck={false}
               />
-              <button type="button" className="btn-ghost text-xs shrink-0" onClick={unlockAdvanceSetting}>
+              <button
+                type="button"
+                className="btn-ghost text-xs shrink-0"
+                onClick={unlockAdvanceSetting}
+              >
                 Unlock
               </button>
             </div>
             {advanceError && <p className="text-xs text-red-400">{advanceError}</p>}
           </div>
+        ) : advanceMode === 'engineering' ? (
+          <EngineeringConsolePanel onLock={lockAdvanceSetting} />
         ) : (
           <div className="space-y-2">
-            <p className="text-xs text-emerald-400/90 mb-2">Unlocked — admin session active</p>
-            {advanceWeightFields.map((f) => (
+            {advanceFields.map((f) => (
               <SettingRow
                 key={f.key}
                 field={f}
@@ -1263,12 +1279,15 @@ export default function Settings() {
                 Technical error: WEIGHT_ADJUSTMENT-error
               </p>
             )}
-            
+
             {advanceMessage && (
               <p className="text-xs text-brand-300 mt-2">{advanceMessage}</p>
             )}
-            <ManualHywaClosePanel />
-            <button type="button" className="btn-ghost mt-3 text-sm" onClick={lockAdvanceSetting}>
+            <button
+              type="button"
+              className="btn-ghost mt-3 text-sm"
+              onClick={lockAdvanceSetting}
+            >
               Lock section
             </button>
           </div>
