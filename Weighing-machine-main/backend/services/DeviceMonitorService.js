@@ -39,6 +39,8 @@ let cachedPendingSyncCount = { value: 0, at: 0 };
 const lastCameraFrameAt = new Map();
 let rfidScanning = false;
 let latestRawWeight = 0;
+/** Last resolved live display kg (single source for UI + external LED). */
+let latestDisplayWeight = 0;
 let weighmentContext = { truckNumber: null, rfidTag: null };
 let displayResyncTimer = null;
 const DISPLAY_RESYNC_MS = 5000;
@@ -126,6 +128,7 @@ function buildConfig() {
       antennaPower: Number(pick('RFID_ANTENNA_POWER')) || 20,
     },
     weighbridge: {
+      // Settings UI (SQLite) wins over .env so COM/baud changes in Settings take effect.
       comPort: settings.WEIGHBRIDGE_COM_PORT || pickPreferEnv('WEIGHBRIDGE_COM_PORT'),
       baudRate: settings.WEIGHBRIDGE_BAUD_RATE || pickPreferEnv('WEIGHBRIDGE_BAUD_RATE'),
       dataBits: settings.WEIGHBRIDGE_DATA_BITS || pickPreferEnv('WEIGHBRIDGE_DATA_BITS'),
@@ -709,7 +712,11 @@ function getWeighbridgeRawWeight() {
 }
 
 function getWeighbridgeDisplayWeight() {
-  return applyLiveWeightAdjustment(getWeighbridgeRawWeight(), {
+  // Do not re-run release/ramp resolvers here — that double-advances and makes
+  // the LED diverge from the kg already sent to the software UI.
+  if (latestRawWeight <= 0) return 0;
+  if (latestDisplayWeight > 0) return latestDisplayWeight;
+  return applyLiveWeightAdjustment(latestRawWeight, {
     isStable: isWeighbridgeStable(),
   });
 }
@@ -719,23 +726,17 @@ function buildAdjustedWeightPayload(payload) {
   latestRawWeight = Number.isFinite(raw) ? raw : 0;
 
   const WeightReleaseService = require('./WeightReleaseService');
-  const released = WeightReleaseService.resolveDisplayKg(latestRawWeight);
-  if (released != null) {
-    return {
-      ...payload,
-      rawWeight: latestRawWeight,
-      weight: released,
-      weightReleaseActive: true,
-    };
-  }
+  // Resolve exactly once per sample — UI event and LED both use this result.
+  const display = resolveLiveDisplayWeight(latestRawWeight, {
+    isStable: !!payload?.isStable,
+  });
+  latestDisplayWeight = display > 0 ? display : 0;
 
   return {
     ...payload,
     rawWeight: latestRawWeight,
-    weight: applyLiveWeightAdjustment(latestRawWeight, {
-      isStable: !!payload?.isStable,
-    }),
-    weightReleaseActive: false,
+    weight: latestDisplayWeight,
+    weightReleaseActive: WeightReleaseService.isActive(),
   };
 }
 
@@ -753,10 +754,11 @@ function startDisplayResyncTimer() {
     try {
       const ExternalDisplayService = require('./ExternalDisplayService');
       if (!ExternalDisplayService.isEnabled()) return;
-      const rawKg = getWeighbridgeRawWeight();
-      if (rawKg <= 0) return;
+      if (latestRawWeight <= 0 || latestDisplayWeight <= 0) return;
       if (!isWeighbridgeStable()) return;
-      pushWeightToExternalDisplay(rawKg, 'keepalive');
+      pushWeightToExternalDisplay(latestDisplayWeight, 'keepalive', {
+        scaleRawKg: latestRawWeight,
+      });
     } catch (_e) {
       /* optional */
     }
@@ -776,23 +778,25 @@ function getExternalDisplayWeight() {
   return getWeighbridgeDisplayWeight();
 }
 
-function pushWeightToExternalDisplay(_kg, source = 'unknown') {
+function pushWeightToExternalDisplay(kg, source = 'unknown', meta = {}) {
   try {
     const ExternalDisplayService = require('./ExternalDisplayService');
     if (!ExternalDisplayService.isEnabled()) return;
 
-    const scaleRawKg = getWeighbridgeRawWeight();
-    const displayKg = getWeighbridgeDisplayWeight();
+    const scaleRawKg =
+      meta.scaleRawKg != null
+        ? Math.round(Number(meta.scaleRawKg)) || 0
+        : getWeighbridgeRawWeight();
+    const requested = Math.round(Number(kg));
+    const displayKg = Number.isFinite(requested)
+      ? Math.max(0, requested)
+      : getWeighbridgeDisplayWeight();
 
-    if (source === 'weightZero') {
+    if (source === 'weightZero' || displayKg <= 0) {
       ExternalDisplayService.updateWeight(0, {
         source: 'weightZero',
         scaleRawKg: 0,
       });
-      return;
-    }
-
-    if (displayKg <= 0) {
       return;
     }
 
@@ -820,9 +824,13 @@ function wireWeighbridgeAdapter(adapter) {
     const adjustedPayload = buildAdjustedWeightPayload(payload);
     emitEvent('device:weightUpdate', adjustedPayload);
     patchWeighbridgeInCache(adjustedPayload);
-    const rawKg = getWeighbridgeRawWeight();
-    if (rawKg > 0) {
-      pushWeightToExternalDisplay(rawKg, 'weightUpdate');
+    // Same kg the software UI just received — do not re-resolve for the LED.
+    if (adjustedPayload.weight > 0) {
+      pushWeightToExternalDisplay(adjustedPayload.weight, 'weightUpdate', {
+        scaleRawKg: adjustedPayload.rawWeight,
+      });
+    } else if (adjustedPayload.rawWeight <= 0) {
+      pushWeightToExternalDisplay(0, 'weightZero');
     }
     try {
       const WorkflowEngine = require('../engine/WorkflowEngine');
@@ -837,11 +845,12 @@ function wireWeighbridgeAdapter(adapter) {
       ...payload,
       isStable: true,
     });
-    const rawKg = getWeighbridgeRawWeight();
-    if (rawKg === 0) {
+    if (adjustedPayload.rawWeight <= 0 || adjustedPayload.weight <= 0) {
       pushWeightToExternalDisplay(0, 'weightZero');
     } else {
-      pushWeightToExternalDisplay(rawKg, 'stableWeight');
+      pushWeightToExternalDisplay(adjustedPayload.weight, 'stableWeight', {
+        scaleRawKg: adjustedPayload.rawWeight,
+      });
     }
     emitEvent('device:stableWeight', adjustedPayload);
     patchWeighbridgeInCache({
@@ -862,6 +871,7 @@ function wireWeighbridgeAdapter(adapter) {
 
   adapter.onWeightZero((payload) => {
     latestRawWeight = 0;
+    latestDisplayWeight = 0;
     try {
       const WeightReleaseService = require('./WeightReleaseService');
       WeightReleaseService.clear();
@@ -1072,6 +1082,7 @@ async function restart(windowGetter) {
   latestStatus = null;
   lastRfidSeen = null;
   latestRawWeight = 0;
+  latestDisplayWeight = 0;
   cloudReachable = false;
   cloudStatusCheckedAt = 0;
   clearRfidRetryTimers();
@@ -1380,7 +1391,12 @@ function getCaptureWeightKg(fallbackKg) {
 }
 
 function syncExternalDisplay() {
-  pushWeightToExternalDisplay(getExternalDisplayWeight(), 'manual-sync');
+  const kg = getExternalDisplayWeight();
+  if (kg <= 0) {
+    pushWeightToExternalDisplay(0, 'weightZero');
+    return;
+  }
+  pushWeightToExternalDisplay(kg, 'manual-sync', { scaleRawKg: latestRawWeight });
 }
 
 function broadcastLiveWeight() {
@@ -1390,7 +1406,9 @@ function broadcastLiveWeight() {
     weight: raw,
     isStable: weighbridgeAdapter?.isStable ?? false,
   });
-  pushWeightToExternalDisplay(getExternalDisplayWeight(), 'broadcast');
+  pushWeightToExternalDisplay(adjustedPayload.weight, 'broadcast', {
+    scaleRawKg: adjustedPayload.rawWeight,
+  });
   emitEvent('device:weightUpdate', adjustedPayload);
   patchWeighbridgeInCache(adjustedPayload);
 }

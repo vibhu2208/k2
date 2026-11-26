@@ -344,6 +344,10 @@ function resolveLogHint() {
     const { PATHS } = require('../backend/utils/fileStorage');
     return path.join(PATHS.LOGS, 'app.log');
   } catch (_e) {
+    const configured = (process.env.WEIGHBRIDGE_DATA_ROOT || '').trim();
+    if (configured) {
+      return path.join(configured, 'logs', 'app.log');
+    }
     if (app.isPackaged) {
       return path.join(app.getPath('userData'), 'weighbridge-data', 'logs', 'app.log');
     }
@@ -353,15 +357,28 @@ function resolveLogHint() {
 
 async function startup() {
   try {
+    const fileStorage = require('../backend/utils/fileStorage');
+    const configuredRoot = (process.env.WEIGHBRIDGE_DATA_ROOT || '').trim();
+    if (configuredRoot) {
+      fileStorage.initDataRoot(configuredRoot);
+      // eslint-disable-next-line no-console
+      console.log('[main] Data root:', fileStorage.PATHS.ROOT);
+    } else if (app.isPackaged) {
+      fileStorage.initPackagedStorage(app.getPath('userData'));
+    }
+
     if (app.isPackaged) {
-      const { initPackagedStorage } = require('../backend/utils/fileStorage');
-      initPackagedStorage(app.getPath('userData'));
       const bundledEnv = path.join(process.resourcesPath, '.env');
-      const userEnv = path.join(app.getPath('userData'), 'weighbridge-data', '.env');
+      const userEnv = path.join(fileStorage.PATHS.ROOT, '.env');
       try {
         if (fs.existsSync(bundledEnv)) {
           fs.copyFileSync(bundledEnv, userEnv);
           loadDotenvFile(bundledEnv, true);
+          // Re-apply data root if bundled .env sets WEIGHBRIDGE_DATA_ROOT.
+          const afterRoot = (process.env.WEIGHBRIDGE_DATA_ROOT || '').trim();
+          if (afterRoot && path.resolve(afterRoot) !== path.resolve(fileStorage.PATHS.ROOT)) {
+            fileStorage.initDataRoot(afterRoot);
+          }
         } else if (fs.existsSync(userEnv)) {
           loadDotenvFile(userEnv, true);
         }

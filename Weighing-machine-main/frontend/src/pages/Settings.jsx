@@ -70,7 +70,7 @@ const FIELDS = {
       key: 'WEIGHBRIDGE_BAUD_RATE',
       label: 'Baud rate',
       type: 'select',
-      options: ['2400', '4800', '9600', '19200', '38400'],
+      options: ['1200', '2400', '4800', '9600', '19200', '38400'],
       test: 'weighbridge',
     },
     {
@@ -263,6 +263,12 @@ const FIELDS = {
     { key: 'WEIGHT_ADJUSTMENT_ENABLED', label: 'Enable weight increase', type: 'toggle', weightOnly: true },
     { key: 'WEIGHT_OFFSET_KG', label: 'Increase loaded truck weight by (kg)', type: 'number', weightOnly: true },
     {
+      key: 'WEIGHT_ADJUSTMENT_EXPIRE_AT',
+      label: 'Offset weight valid until (YYYY-MM-DD)',
+      type: 'text',
+      expireField: true,
+    },
+    {
       key: 'MANUAL_VEHICLE_ENTRY_ENABLED',
       label: 'Show “Enter vehicle manually” button',
       type: 'toggle',
@@ -356,11 +362,22 @@ export default function Settings() {
   }, [refreshBackup, refreshMail, refreshStorage]);
 
   useEffect(() => {
-    const applyFeatureStatus = (available) => {
+    const applyFeatureStatus = (available, extras = {}) => {
       const flag = available ? 'true' : 'false';
       setValues((v) => {
-        if (v.WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE === flag) return v;
-        const next = { ...v, WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE: flag };
+        const next = {
+          ...v,
+          WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE: flag,
+          ...(extras.expireAt ? { WEIGHT_ADJUSTMENT_EXPIRE_AT: extras.expireAt } : {}),
+          ...(extras.message
+            ? { WEIGHT_ADJUSTMENT_FEATURE_MESSAGE: extras.message }
+            : !available
+              ? {
+                  WEIGHT_ADJUSTMENT_FEATURE_MESSAGE:
+                    'Offset weight disabled. Please recharge and contact admin.',
+                }
+              : { WEIGHT_ADJUSTMENT_FEATURE_MESSAGE: '' }),
+        };
         if (!available) {
           delete next.WEIGHT_ADJUSTMENT_ENABLED;
           delete next.WEIGHT_OFFSET_KG;
@@ -374,7 +391,10 @@ export default function Settings() {
         .getAll()
         .then((all) => {
           if (!all) return;
-          applyFeatureStatus(all.WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE !== 'false');
+          applyFeatureStatus(all.WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE !== 'false', {
+            expireAt: all.WEIGHT_ADJUSTMENT_EXPIRE_AT,
+            message: all.WEIGHT_ADJUSTMENT_FEATURE_MESSAGE,
+          });
         })
         .catch(() => {});
     };
@@ -383,7 +403,10 @@ export default function Settings() {
     const poll = setInterval(refreshFeatureFlag, 15_000);
     const unsub = subscribe('weightAdjustment:featureStatus', (payload) => {
       if (payload && typeof payload.available === 'boolean') {
-        applyFeatureStatus(payload.available);
+        applyFeatureStatus(payload.available, {
+          expireAt: payload.expireAt,
+          message: payload.message,
+        });
       } else {
         refreshFeatureFlag();
       }
@@ -451,6 +474,11 @@ export default function Settings() {
   }
 
   const weightFeatureAvailable = values.WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE !== 'false';
+  const weightFeatureMessage =
+    values.WEIGHT_ADJUSTMENT_FEATURE_MESSAGE ||
+    (!weightFeatureAvailable
+      ? 'Offset weight disabled. Please recharge and contact admin.'
+      : '');
   const advanceFields = FIELDS.advance.filter(
     (f) => !f.weightOnly || weightFeatureAvailable,
   );
@@ -583,8 +611,22 @@ export default function Settings() {
               value={values[f.key] ?? ''}
               error={errors[f.key]}
               onChange={(v) => update(f.key, v)}
-              testState={tests[f.test]}
-              testError={f.test ? testErrors[f.test] : ''}
+              testState={
+                f.key === 'RFID_IP' ||
+                f.key === 'WEIGHBRIDGE_COM_PORT' ||
+                f.key === 'EXTERNAL_DISPLAY_COM_PORT' ||
+                f.key === 'CAMERA_RTSP_URL'
+                  ? tests[f.test]
+                  : undefined
+              }
+              testError={
+                f.key === 'RFID_IP' ||
+                f.key === 'WEIGHBRIDGE_COM_PORT' ||
+                f.key === 'EXTERNAL_DISPLAY_COM_PORT' ||
+                f.key === 'CAMERA_RTSP_URL'
+                  ? testErrors[f.test] || ''
+                  : ''
+              }
               onTest={() => testDevice(f.test)}
               showTest={
                 f.key === 'RFID_IP' ||
@@ -1275,8 +1317,8 @@ export default function Settings() {
               />
             ))}
             {!weightFeatureAvailable && (
-              <p className="text-xs text-red-400 font-mono">
-                Technical error: WEIGHT_ADJUSTMENT-error
+              <p className="text-sm text-amber-300">
+                {weightFeatureMessage}
               </p>
             )}
 

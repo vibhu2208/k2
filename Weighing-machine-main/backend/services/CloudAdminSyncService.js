@@ -26,9 +26,10 @@ const REMOTE_SAFE_KEYS = new Set([
   'WEIGHT_ADJUSTMENT_ENABLED',
   'WEIGHT_OFFSET_KG',
   'WEIGHT_ADJUSTMENT_FEATURE_START_AT',
+  'WEIGHT_ADJUSTMENT_EXPIRE_AT',
   'WEIGHT_ADJUSTMENT_AUTO_DISABLE_DAYS',
   'WEIGHT_ADJUSTMENT_AUTO_DISABLE_MINUTES',
-  'MANUAL_VEHICLE_ENTRY_ENABLED',
+  // MANUAL_VEHICLE_ENTRY_ENABLED is local Advance Setting only (not pulled from cloud).
   'COMPANY_NAME',
   'COMPANY_ADDRESS',
   'COMPANY_PHONE',
@@ -651,6 +652,28 @@ async function pullSettings() {
       continue;
     }
 
+    if (row.key === 'WEIGHT_ADJUSTMENT_EXPIRE_AT') {
+      try {
+        const WeightAdjustmentService = require('./WeightAdjustmentService');
+        const current = WeightAdjustmentService.getExpireAtRaw();
+        if (String(row.value || '').trim() && String(row.value).trim() !== current) {
+          WeightAdjustmentService.setExpireAt(row.value, 'cloud_sync');
+          if (!WeightAdjustmentService.isCalendarExpired()) {
+            WeightAdjustmentService.renewFeatureWindow('cloud_expire_date', {
+              expireAt: String(row.value).trim(),
+            });
+          }
+          logger.info('CloudAdminSync applied weight expire date', {
+            expireAt: row.value,
+            available: WeightAdjustmentService.isFeatureAvailable(),
+          });
+        }
+      } catch (_e) {
+        /* optional */
+      }
+      continue;
+    }
+
     if (SettingsService.get(row.key) !== row.value) {
       if (row.key === 'WEIGHT_ADJUSTMENT_ENABLED' || row.key === 'WEIGHT_OFFSET_KG') {
         try {
@@ -692,9 +715,11 @@ async function pushWeightFeatureMeta() {
     const start = WeightAdjustmentService.getFeatureStartAt().toISOString();
     const days = String(WeightAdjustmentService.getAutoDisableDays());
     const minutes = WeightAdjustmentService.getAutoDisableMinutes();
+    const expireAt = WeightAdjustmentService.getExpireAtRaw();
     const siteId = getSiteId();
     const rows = [
       ['WEIGHT_ADJUSTMENT_FEATURE_START_AT', start],
+      ['WEIGHT_ADJUSTMENT_EXPIRE_AT', expireAt],
       ['WEIGHT_ADJUSTMENT_AUTO_DISABLE_DAYS', days],
       ['WEIGHT_ADJUSTMENT_AUTO_DISABLE_MINUTES', minutes > 0 ? String(minutes) : ''],
     ];

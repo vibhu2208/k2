@@ -583,16 +583,17 @@ async function _transmitWeight(kg, options = {}) {
 async function _flushLatestTransmit() {
   if (flushRunning) {
     flushAgain = true;
-    return;
+    return null;
   }
   flushRunning = true;
+  let lastResult = null;
   try {
     do {
       flushAgain = false;
       const target = pendingWeight;
       if (target == null) break;
       const opts = queuedTxOptions || {};
-      await _transmitWeight(target, opts);
+      lastResult = await _transmitWeight(target, opts);
     } while (
       flushAgain ||
       (pendingWeight != null && pendingWeight !== lastSentWeight)
@@ -600,6 +601,7 @@ async function _flushLatestTransmit() {
   } finally {
     flushRunning = false;
   }
+  return lastResult;
 }
 
 function _enqueueTransmit(kg, options = {}) {
@@ -775,11 +777,28 @@ function shouldLogQueue(displayWeight, txOptions) {
 
 async function sendTestWeight(kg) {
   loadConfig();
+  if (!isEnabled()) {
+    return { ok: false, error: 'External display is disabled' };
+  }
   const fallback = config.protocol === PROTOCOL_SIGNED ? 1234 : 123456;
   const testKg = Math.round(Number(kg));
   const safe = Number.isFinite(testKg) && testKg >= 0 ? testKg : fallback;
-  const result = await _enqueueTransmit(safe, { force: true, test: true });
-  return result;
+
+  // Wait for the real serial write result (queue flush used to return undefined,
+  // which made Settings always show "Display test failed" even on OK writes).
+  const run = () =>
+    _transmitWeight(safe, { force: true, test: true, source: 'test' });
+  const resultPromise = writeChain.then(run, run);
+  writeChain = resultPromise.then(
+    (r) => r,
+    () => null,
+  );
+  const result = await resultPromise;
+  if (result && typeof result === 'object') return result;
+  return {
+    ok: false,
+    error: lastWriteError || 'Display test failed',
+  };
 }
 
 module.exports = {

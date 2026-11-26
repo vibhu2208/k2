@@ -11,14 +11,12 @@ import {
   deviceAPI,
   reportAPI,
   settingsAPI,
-  ticketAPI,
   vehicleAPI,
   workflowAPI,
   transactionAPI,
 } from '../api/ipc.js';
 import EditSlipModal from '../components/reports/EditSlipModal.jsx';
 import LocalImage from '../components/shared/LocalImage.jsx';
-import { isStuckOpenTicket } from '../lib/ticketStatus.js';
 import {
   VEHICLE_TYPES,
   isHywa,
@@ -75,7 +73,6 @@ export default function WeighmentScreen() {
   const [destinationsList, setDestinationsList] = useState([]);
   const [operatorsList, setOperatorsList] = useState([]);
   const [companiesList, setCompaniesList] = useState(['MKG GREEN ENERGY', 'DCC']);
-  const [openTickets, setOpenTickets] = useState([]);
   const [selectedOpenTicket, setSelectedOpenTicket] = useState(null);
   const [editOpenTicket, setEditOpenTicket] = useState(null);
   const [manualPhotos, setManualPhotos] = useState(null);
@@ -104,7 +101,8 @@ export default function WeighmentScreen() {
   const vehicleType = resolveVehicleType(vehicle, openTicket) || weighmentInfo?.vehicleType || null;
   const hywaVehicle = isHywa(vehicleType) || weighmentInfo?.isHywa === true;
 
-  const kg = useStableLiveWeight(displayWeight, { throttleMs: 300, zeroHoldMs: 2000 });
+  // Keep UI kg in lockstep with the external LED (same backend display weight).
+  const kg = useStableLiveWeight(displayWeight, { throttleMs: 50, zeroHoldMs: 400 });
 
   const effectiveWeight = kg;
 
@@ -148,7 +146,7 @@ export default function WeighmentScreen() {
     manualPhotosReady;
 
   const saveBlockedReason = !truckForSave && !selectedOpenTicket
-    ? 'Scan RFID, enter vehicle number, or select an open ticket below'
+    ? 'Scan RFID or enter vehicle number'
     : !photosOptional && manualPhotoCapture && !manualPhotosReady
       ? `Press Capture images first (at least ${minPhotosToSave} photo${minPhotosToSave === 1 ? '' : 's'} required)`
       : weighMode === 'CLOSE' && !material
@@ -205,33 +203,9 @@ export default function WeighmentScreen() {
     [applyOpenTicketFields],
   );
 
-  const clearSelectedOpenTicket = useCallback(() => {
-    setSelectedOpenTicket(null);
-    setMaterial('');
-    setDriver('');
-    setCustomerName('');
-    setDestination('');
-    setOperatorName('');
-    setCompany('MKG GREEN ENERGY');
-    if (!rfidLocked && !displayTag) {
-      setIdentifiedTruck(null);
-      setVehicle(null);
-      setEnteredManually(false);
-    }
-  }, [rfidLocked, displayTag]);
-
-  const refreshOpenTickets = useCallback(() => {
-    ticketAPI
-      .listOpen()
-      .then(setOpenTickets)
-      .catch(() => setOpenTickets([]));
-  }, []);
-
   const handleOpenTicketEdited = useCallback(
     async (updated) => {
       if (!updated?.id) return;
-      refreshOpenTickets();
-      setOpenTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       if (selectedOpenTicket?.id === updated.id) {
         setSelectedOpenTicket(updated);
         setIdentifiedTruck(String(updated.truck_number || '').trim().toUpperCase());
@@ -244,7 +218,7 @@ export default function WeighmentScreen() {
         }
       }
     },
-    [refreshOpenTickets, selectedOpenTicket?.id, applyOpenTicketFields],
+    [selectedOpenTicket?.id, applyOpenTicketFields],
   );
 
   useEffect(() => {
@@ -296,11 +270,10 @@ export default function WeighmentScreen() {
     setCapturingPhotos(false);
     setRetryingCameraId(null);
     setSelectedOpenTicket(null);
-    refreshOpenTickets();
     deviceAPI.setWeighmentContext({}).catch(() => {});
     workflowAPI.clearSessionAfterSave().catch(() => {});
     deviceAPI.stopRfidScan().catch(() => {});
-  }, [refreshOpenTickets]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -327,8 +300,6 @@ export default function WeighmentScreen() {
     };
     refreshManualEntrySetting();
     const manualEntryTimer = setInterval(refreshManualEntrySetting, 5000);
-
-    refreshOpenTickets();
 
     (async () => {
       try {
@@ -393,7 +364,7 @@ export default function WeighmentScreen() {
       cancelled = true;
       clearInterval(manualEntryTimer);
     };
-  }, [refreshOpenTickets]);
+  }, []);
 
   useEffect(() => {
     setManualPhotos(null);
@@ -822,9 +793,6 @@ export default function WeighmentScreen() {
       <header>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-2xl font-semibold text-white">Weighment</h1>
-          {openTickets.length > 0 && (
-            <Badge label={`${openTickets.length} open ticket(s)`} variant="warning" />
-          )}
         </div>
         <p className="mt-1 text-sm text-slate-400">
           Scan RFID or enter vehicle manually → capture weight and photos → save open ticket or close existing ticket
@@ -842,69 +810,6 @@ export default function WeighmentScreen() {
           </p>
         )}
       </header>
-
-      {openTickets.length > 0 && (
-        <div className="card p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-            <h2 className="text-xs uppercase tracking-widest text-slate-400">Open tickets</h2>
-            {selectedOpenTicket && (
-              <button
-                type="button"
-                className="text-xs text-slate-400 hover:text-white underline"
-                onClick={clearSelectedOpenTicket}
-              >
-                Clear selection
-              </button>
-            )}
-          </div>
-          <p className="text-xs text-slate-500 mb-2">
-            Select a ticket to close it manually (weigh, capture photos, then Save). Open tickets
-            remain visible until closed — including tickets from previous days.
-          </p>
-          <ul className="text-sm space-y-1 max-h-40 overflow-y-auto">
-            {openTickets.map((t) => {
-              const isSelected = selectedOpenTicket?.id === t.id;
-              const isPreviousDay = !isTicketFromToday(t.timestamp_in || t.created_at);
-              const isStuck = isStuckOpenTicket(t);
-              const ticketVehicleType = resolveVehicleType(null, t);
-              const listWeight = openTicketFirstWeighKg(t, ticketVehicleType);
-              return (
-                <li key={t.id}>
-                  <div
-                    className={`w-full flex flex-wrap items-center justify-between gap-2 rounded-lg border px-2 py-2 transition-colors ${
-                      isSelected
-                        ? 'border-brand-500 bg-brand-950/40 text-white'
-                        : 'border-slate-700/60 bg-slate-900/30 text-slate-300'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleSelectOpenTicket(t)}
-                      className="flex flex-1 flex-wrap items-center justify-between gap-2 text-left min-w-0"
-                    >
-                      <span className="font-mono text-xs">{t.slip_number}</span>
-                      <span className="font-mono text-xs">{t.truck_number}</span>
-                      <span className="font-mono text-xs">{fmtKg(listWeight)}</span>
-                      <span className="w-full text-[10px] text-slate-500">
-                        {fmtTicketDate(t.timestamp_in || t.created_at)}
-                        {isPreviousDay ? ' · previous day' : ''}
-                        {isStuck ? ' · needs close (stuck)' : ''}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      className="shrink-0 text-[10px] uppercase tracking-wide text-amber-300 hover:text-amber-200 px-1"
-                      onClick={() => setEditOpenTicket(t)}
-                    >
-                      Edit
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2 flex flex-col gap-4">
@@ -1703,29 +1608,4 @@ function Row({ label, value, mono, bold }) {
 function fmtKg(v) {
   if (v == null || Number.isNaN(v)) return '—';
   return `${Number(v).toLocaleString('en-IN')} kg`;
-}
-
-function fmtTicketDate(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function isTicketFromToday(iso) {
-  if (!iso) return true;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return true;
-  const now = new Date();
-  return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate()
-  );
 }

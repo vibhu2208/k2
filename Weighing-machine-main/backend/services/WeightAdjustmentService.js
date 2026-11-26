@@ -10,8 +10,18 @@ const ADMIN_WEIGHT_KEYS = Object.freeze([
   'WEIGHT_OFFSET_KG',
 ]);
 
+/** Editable in Advance Setting even after expiry (used to recharge). */
+const ADMIN_EXPIRE_KEY = 'WEIGHT_ADJUSTMENT_EXPIRE_AT';
+
+/** Shown in Advance Setting when the offset window has ended. */
+const FEATURE_EXPIRED_MESSAGE =
+  'Offset weight disabled. Please recharge and contact admin.';
+
 const ENABLED_AT_KEY = 'WEIGHT_ADJUSTMENT_ENABLED_AT';
 const FEATURE_START_AT_KEY = 'WEIGHT_ADJUSTMENT_FEATURE_START_AT';
+const EXPIRE_AT_KEY = 'WEIGHT_ADJUSTMENT_EXPIRE_AT';
+/** Last calendar day offset weight stays available (YYYY-MM-DD, local time). */
+const DEFAULT_EXPIRE_AT = '2026-11-30';
 const AUTO_DISABLE_DAYS_KEY = 'WEIGHT_ADJUSTMENT_AUTO_DISABLE_DAYS';
 const AUTO_DISABLE_MINUTES_KEY = 'WEIGHT_ADJUSTMENT_AUTO_DISABLE_MINUTES';
 const MINUTES_APPLIED_KEY = 'WEIGHT_ADJUSTMENT_AUTO_DISABLE_MINUTES_APPLIED';
@@ -144,7 +154,55 @@ function getFeatureStartAt() {
   return ensureFeatureStartStamped();
 }
 
+/** Parse YYYY-MM-DD → local calendar date parts, or null. */
+function parseExpireDate(raw) {
+  const text = String(raw || '').trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const d = new Date(year, month - 1, day);
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
+    return null;
+  }
+  return { year, month, day, date: d };
+}
+
+function getExpireAtRaw() {
+  const envRaw = process.env.WEIGHT_ADJUSTMENT_EXPIRE_AT;
+  if (envRaw !== undefined && String(envRaw).trim() !== '') {
+    return String(envRaw).trim();
+  }
+  const fromDb = String(SettingsService.get(EXPIRE_AT_KEY) || '').trim();
+  return fromDb || DEFAULT_EXPIRE_AT;
+}
+
+/** Last inclusive day offset weight is allowed (local midnight of that date). */
+function getExpireAt() {
+  return parseExpireDate(getExpireAtRaw()) || parseExpireDate(DEFAULT_EXPIRE_AT);
+}
+
+function localDateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Calendar hard stop: disabled after the configured “valid until” day (local time).
+ * Default is 2026-11-30 (end of this month — November has no 31st).
+ */
+function isCalendarExpired(now = new Date()) {
+  const expire = getExpireAt();
+  if (!expire) return false;
+  return localDateKey(now) > localDateKey(expire.date);
+}
+
 function isFeatureExpired() {
+  if (isCalendarExpired()) return true;
   const start = getFeatureStartAt();
   return Date.now() - start.getTime() >= getFeatureWindowMs();
 }
@@ -157,11 +215,32 @@ function isFeatureAvailable() {
  * Restart the feature window from now so weight-increase controls unlock again.
  * Also syncs the applied window signature so ensureFeatureStartStamped keeps this stamp.
  */
-function renewFeatureWindow(reason = 'manual_renew') {
+function setExpireAt(yyyyMmDd, reason = 'manual_set') {
+  const parsed = parseExpireDate(yyyyMmDd);
+  if (!parsed) {
+    const err = new Error('Invalid expire date — use YYYY-MM-DD');
+    err.code = 'WEIGHT_ADJUSTMENT_EXPIRE_AT_INVALID';
+    throw err;
+  }
+  const value = localDateKey(parsed.date);
+  SettingsService.set(EXPIRE_AT_KEY, value);
+  logger.info('Weight increase expire date updated', { reason, expireAt: value });
+  return value;
+}
+
+function renewFeatureWindow(reason = 'manual_renew', options = {}) {
   syncWindowConfigToDb();
   const stamp = ts.now();
   SettingsService.set(FEATURE_START_AT_KEY, stamp);
   SettingsService.set(MINUTES_APPLIED_KEY, windowSignature());
+  if (options.expireAt) {
+    setExpireAt(options.expireAt, reason);
+  } else if (isCalendarExpired()) {
+    // Recharge without an explicit date → extend through end of next month.
+    const now = new Date();
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+    setExpireAt(localDateKey(nextMonth), reason);
+  }
   logger.info('Weight increase feature window renewed', {
     reason,
     featureStartAt: stamp,
@@ -170,8 +249,8 @@ function renewFeatureWindow(reason = 'manual_renew') {
   try {
     const { emit } = require('../utils/rendererEvents');
     emit('weightAdjustment:featureStatus', {
-      available: true,
-      expired: false,
+      available: isFeatureAvailable(),
+      expired: isFeatureExpired(),
       renewed: true,
       ...getFeatureStatus(),
     });
@@ -216,17 +295,40 @@ function getFeatureStatus() {
   const minutes = getAutoDisableMinutes();
   const days = getAutoDisableDays();
   const windowMs = getFeatureWindowMs();
-  const expiresAt = new Date(start.getTime() + windowMs);
-  const expired = Date.now() >= expiresAt.getTime();
+  const windowExpiresAt = new Date(start.getTime() + windowMs);
+  const calendarExpire = getExpireAt();
+  const calendarExpired = isCalendarExpired();
+  // End of the expire calendar day (local).
+  const calendarExpiresAt = calendarExpire
+    ? new Date(
+        calendarExpire.year,
+        calendarExpire.month - 1,
+        calendarExpire.day,
+        23,
+        59,
+        59,
+        999,
+      )
+    : null;
+  const windowExpired = Date.now() >= windowExpiresAt.getTime();
+  const expired = calendarExpired || windowExpired;
+  const expiresAt =
+    calendarExpiresAt && calendarExpiresAt.getTime() < windowExpiresAt.getTime()
+      ? calendarExpiresAt
+      : windowExpiresAt;
   return {
     available: !expired,
     expired,
+    calendarExpired,
+    windowExpired,
     days,
     minutes: minutes || null,
     windowMs,
     featureStartAt: start.toISOString(),
+    expireAt: calendarExpire ? localDateKey(calendarExpire.date) : DEFAULT_EXPIRE_AT,
     expiresAt: expiresAt.toISOString(),
-    remainingMs: expired ? 0 : expiresAt.getTime() - Date.now(),
+    remainingMs: expired ? 0 : Math.max(0, expiresAt.getTime() - Date.now()),
+    message: expired ? FEATURE_EXPIRED_MESSAGE : '',
   };
 }
 
@@ -268,7 +370,7 @@ function onEnabledSettingChanged(value) {
 
 function assertFeatureAllowsChanges() {
   if (isFeatureExpired()) {
-    const err = new Error('Technical error: WEIGHT_ADJUSTMENT-error');
+    const err = new Error(FEATURE_EXPIRED_MESSAGE);
     err.code = 'WEIGHT_ADJUSTMENT-error';
     throw err;
   }
@@ -429,9 +531,24 @@ function split(rawKg, context = {}) {
   };
 }
 
+function ensureExpireAtInDb() {
+  try {
+    const { getDb } = require('../database/db');
+    const row = getDb()
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get(EXPIRE_AT_KEY);
+    if (!row || !String(row.value || '').trim()) {
+      SettingsService.set(EXPIRE_AT_KEY, DEFAULT_EXPIRE_AT);
+    }
+  } catch {
+    SettingsService.set(EXPIRE_AT_KEY, getExpireAtRaw());
+  }
+}
+
 function start() {
   stop();
   syncWindowConfigToDb();
+  ensureExpireAtInDb();
   const minutes = getAutoDisableMinutes();
   const cronExpr = minutes > 0 ? AUTO_DISABLE_CRON_MINUTELY : AUTO_DISABLE_CRON_HOURLY;
   if (!cron.validate(cronExpr)) {
@@ -468,8 +585,12 @@ function stop() {
 
 module.exports = {
   ADMIN_WEIGHT_KEYS,
+  ADMIN_EXPIRE_KEY,
   ENABLED_AT_KEY,
   FEATURE_START_AT_KEY,
+  EXPIRE_AT_KEY,
+  DEFAULT_EXPIRE_AT,
+  FEATURE_EXPIRED_MESSAGE,
   AUTO_DISABLE_DAYS_KEY,
   AUTO_DISABLE_MINUTES_KEY,
   isEnabled,
@@ -479,6 +600,10 @@ module.exports = {
   getFeatureWindowMs,
   getEnabledAt,
   getFeatureStartAt,
+  getExpireAt,
+  getExpireAtRaw,
+  setExpireAt,
+  isCalendarExpired,
   isFeatureExpired,
   isFeatureAvailable,
   renewFeatureWindow,

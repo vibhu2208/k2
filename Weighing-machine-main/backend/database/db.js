@@ -127,14 +127,14 @@ function ensureDefaultAdmin(handle = db) {
 
 /**
  * One-time: hide "Enter vehicle manually" until Advance Setting enables it.
- * Clears legacy .env/DB defaults of true without overriding later admin toggles.
+ * V2 also clears values re-enabled by older cloud sync / .env defaults.
  */
 function ensureManualVehicleEntryOffByDefault(handle = db) {
   if (!handle) return;
   try {
     const flag = handle
       .prepare(`SELECT value FROM settings WHERE key = ? LIMIT 1`)
-      .get('MANUAL_VEHICLE_ENTRY_DEFAULT_OFF_V1');
+      .get('MANUAL_VEHICLE_ENTRY_DEFAULT_OFF_V2');
     if (flag && String(flag.value || '').trim()) return;
 
     const now = ts.now();
@@ -144,8 +144,8 @@ function ensureManualVehicleEntryOffByDefault(handle = db) {
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     );
     upsert.run('MANUAL_VEHICLE_ENTRY_ENABLED', 'false', now);
-    upsert.run('MANUAL_VEHICLE_ENTRY_DEFAULT_OFF_V1', '1', now);
-    logger.info('Manual vehicle entry defaulted off until Advance Setting enables it');
+    upsert.run('MANUAL_VEHICLE_ENTRY_DEFAULT_OFF_V2', '1', now);
+    logger.info('Manual vehicle entry forced off until Advance Setting enables it');
   } catch (err) {
     logger.warn('ensureManualVehicleEntryOffByDefault failed', { message: err.message });
   }

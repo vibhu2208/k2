@@ -21,8 +21,8 @@ const ENV_DEFAULTS = Object.freeze({
   RFID_ANTENNA_POWER: '20',
   RFID_EPC_PREFIX: '',
   RFID_BLOCKED_TAGS: 'E20047050D40642218490115',
-  WEIGHBRIDGE_COM_PORT: 'COM4',
-  WEIGHBRIDGE_BAUD_RATE: '2400',
+  WEIGHBRIDGE_COM_PORT: 'COM3',
+  WEIGHBRIDGE_BAUD_RATE: '1200',
   WEIGHBRIDGE_DATA_BITS: '7',
   WEIGHBRIDGE_PARITY: 'none',
   WEIGHBRIDGE_STOP_BITS: '1',
@@ -67,6 +67,8 @@ const ENV_DEFAULTS = Object.freeze({
   WEIGHT_OFFSET_KG: '0',
   WEIGHT_ADJUSTMENT_ENABLED_AT: '',
   WEIGHT_ADJUSTMENT_FEATURE_START_AT: '',
+  /** Last day offset weight is available (YYYY-MM-DD). Default: end of Nov 2026. */
+  WEIGHT_ADJUSTMENT_EXPIRE_AT: '2026-11-30',
   WEIGHT_ADJUSTMENT_AUTO_DISABLE_DAYS: '3',
   WEIGHT_ADJUSTMENT_AUTO_DISABLE_MINUTES: '',
   /** Advance Setting → Engineering console access code. */
@@ -114,7 +116,14 @@ const SettingsService = {
       .get(key);
     // Empty string in DB must not block .env fallback (common for AWS_* keys).
     if (row && row.value !== undefined && row.value !== null && String(row.value) !== '') {
+      // Manual vehicle entry: only explicit DB true/false — never inherit a stale .env=true.
+      if (key === 'MANUAL_VEHICLE_ENTRY_ENABLED') {
+        return String(row.value).trim().toLowerCase() === 'true' ? 'true' : 'false';
+      }
       return row.value;
+    }
+    if (key === 'MANUAL_VEHICLE_ENTRY_ENABLED') {
+      return 'false';
     }
     return resolveDefault(key);
   },

@@ -10,7 +10,7 @@ class RealWeighbridgeAdapter extends WeighbridgeAdapter {
     super(config);
     this.bridgeService = new WeightBridgeService({
       port: config.comPort || 'COM3',
-      baudRate: Number(config.baudRate || 2400),
+      baudRate: Number(config.baudRate || 1200),
       dataBits: Number(config.dataBits || 7),
       parity: String(config.parity || 'none'),
       stopBits: Number(config.stopBits || 1),
@@ -107,7 +107,7 @@ class RealWeighbridgeAdapter extends WeighbridgeAdapter {
       ...super.getStatus(),
       currentWeight: snapshot.weight,
       stableWeight: this.bridgeService.getCurrentWeight(),
-      port: this.config.comPort || 'COM4',
+      port: this.config.comPort || 'COM3',
       diagnostics: this.bridgeService.getDiagnostics(),
     };
   }

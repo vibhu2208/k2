@@ -5,10 +5,11 @@ const WEIGHT_AND_ENTRY_FIELDS = [
   { key: 'WEIGHT_ADJUSTMENT_ENABLED', label: 'Enable weight increase', type: 'toggle', weightOnly: true },
   { key: 'WEIGHT_OFFSET_KG', label: 'Increase loaded truck weight by (kg)', type: 'number', weightOnly: true },
   {
-    key: 'MANUAL_VEHICLE_ENTRY_ENABLED',
-    label: 'Show “Enter vehicle manually” on weighbridge',
-    type: 'toggle',
+    key: 'WEIGHT_ADJUSTMENT_EXPIRE_AT',
+    label: 'Offset weight valid until (YYYY-MM-DD)',
+    type: 'text',
   },
+  // Manual vehicle entry is controlled only on the weighbridge Advance Setting (9988).
 ];
 
 const BUSINESS_FIELDS = [
@@ -39,10 +40,6 @@ export default function AdvanceSettings() {
     try {
       const adv = await api.getAdvanceSettings();
       const next = { ...(adv.settings || {}) };
-      // Default hidden unless explicitly enabled.
-      if (next.MANUAL_VEHICLE_ENTRY_ENABLED == null || next.MANUAL_VEHICLE_ENTRY_ENABLED === '') {
-        next.MANUAL_VEHICLE_ENTRY_ENABLED = 'false';
-      }
       setSettings(next);
       const textData = {};
       await Promise.all(
@@ -88,6 +85,11 @@ export default function AdvanceSettings() {
   }
 
   const weightFeatureAvailable = settings.WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE !== 'false';
+  const weightFeatureMessage =
+    settings.WEIGHT_ADJUSTMENT_FEATURE_MESSAGE ||
+    (!weightFeatureAvailable
+      ? 'Offset weight disabled. Please recharge and contact admin.'
+      : '');
   const weightAndEntryFields = WEIGHT_AND_ENTRY_FIELDS.filter(
     (field) => !field.weightOnly || weightFeatureAvailable,
   );
@@ -132,9 +134,7 @@ export default function AdvanceSettings() {
 
       <div className="card p-5 space-y-3">
         {!weightFeatureAvailable && (
-          <p className="text-xs text-red-400 font-mono">
-            Technical error: WEIGHT_ADJUSTMENT-error
-          </p>
+          <p className="text-sm text-amber-300">{weightFeatureMessage}</p>
         )}
         {weightAndEntryFields.map(renderField)}
         <button type="button" className="btn-primary mt-2" onClick={saveSettings}>

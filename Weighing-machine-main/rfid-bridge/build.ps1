@@ -65,4 +65,12 @@ if (-not $msbuild) {
 Write-Host "Using MSBuild: $msbuild"
 
 & $msbuild (Join-Path $Root "rfid-bridge.csproj") /p:Configuration=Release /v:minimal
-Write-Host "Built: $(Join-Path $Root 'bin\rfid-bridge.exe')"
+if ($LASTEXITCODE -ne 0) {
+    throw "rfid-bridge MSBuild failed with exit code $LASTEXITCODE"
+}
+
+$outExe = Join-Path $Root "bin\rfid-bridge.exe"
+if (-not (Test-Path $outExe)) {
+    throw "rfid-bridge.exe was not produced at $outExe"
+}
+Write-Host "Built: $outExe"

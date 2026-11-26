@@ -2,12 +2,16 @@
 
 const SettingsService = require('../../backend/services/SettingsService');
 const OperatorAuthService = require('../../backend/services/OperatorAuthService');
-const { ADMIN_WEIGHT_KEYS } = require('../../backend/services/WeightAdjustmentService');
+const {
+  ADMIN_WEIGHT_KEYS,
+  ADMIN_EXPIRE_KEY,
+} = require('../../backend/services/WeightAdjustmentService');
 
 const NAMESPACE = 'settings';
 
 const ADMIN_ONLY_SET = new Set([
   ...ADMIN_WEIGHT_KEYS,
+  ADMIN_EXPIRE_KEY,
   'MANUAL_VEHICLE_ENTRY_ENABLED',
 ]);
 
@@ -72,22 +76,37 @@ function filterAdminKeys(map) {
   const out = { ...map };
   const WeightAdjustmentService = require('../../backend/services/WeightAdjustmentService');
   const featureAvailable = WeightAdjustmentService.isFeatureAvailable();
+  const status = WeightAdjustmentService.getFeatureStatus();
   out.WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE = featureAvailable ? 'true' : 'false';
+  out.WEIGHT_ADJUSTMENT_EXPIRE_AT = status.expireAt || WeightAdjustmentService.DEFAULT_EXPIRE_AT;
+  if (status.message) {
+    out.WEIGHT_ADJUSTMENT_FEATURE_MESSAGE = status.message;
+  } else {
+    delete out.WEIGHT_ADJUSTMENT_FEATURE_MESSAGE;
+  }
+
+  const adminActive = OperatorAuthService.isAdminSessionActive();
+  if (adminActive) {
+    OperatorAuthService.touchSession();
+  }
 
   if (!featureAvailable) {
     for (const key of ADMIN_WEIGHT_KEYS) {
       delete out[key];
     }
+    if (!adminActive) {
+      delete out[ADMIN_EXPIRE_KEY];
+    }
     return out;
   }
 
-  if (OperatorAuthService.isAdminSessionActive()) {
-    OperatorAuthService.touchSession();
+  if (adminActive) {
     return out;
   }
   for (const key of ADMIN_WEIGHT_KEYS) {
     delete out[key];
   }
+  delete out[ADMIN_EXPIRE_KEY];
   return out;
 }
 
@@ -129,9 +148,13 @@ function register(ipcMain) {
         if (key === 'WEIGHT_OFFSET_KG') return '0';
         if (key === 'WEIGHT_ADJUSTMENT_FEATURE_AVAILABLE') return 'false';
       }
+      if (key === ADMIN_EXPIRE_KEY) {
+        return WeightAdjustmentService.getExpireAtRaw();
+      }
       if (!OperatorAuthService.isAdminSessionActive()) {
         if (key === 'WEIGHT_ADJUSTMENT_ENABLED') return 'false';
         if (key === 'WEIGHT_OFFSET_KG') return '0';
+        if (key === ADMIN_EXPIRE_KEY) return '';
       } else {
         OperatorAuthService.touchSession();
       }
@@ -142,11 +165,37 @@ function register(ipcMain) {
   ipcMain.handle(`${NAMESPACE}:set`, async (_e, key, value) => {
     if (ADMIN_ONLY_SET.has(key)) {
       const WeightAdjustmentService = require('../../backend/services/WeightAdjustmentService');
-      WeightAdjustmentService.assertFeatureAllowsChanges();
+      if (key !== ADMIN_EXPIRE_KEY) {
+        WeightAdjustmentService.assertFeatureAllowsChanges();
+      }
       if (!OperatorAuthService.isAdminSessionActive()) {
         throw new Error('Admin PIN required — unlock Advance Setting first');
       }
       OperatorAuthService.touchSession();
+
+      if (key === ADMIN_EXPIRE_KEY) {
+        WeightAdjustmentService.setExpireAt(value, 'advance_setting');
+        if (!WeightAdjustmentService.isCalendarExpired()) {
+          WeightAdjustmentService.renewFeatureWindow('expire_date_updated', {
+            expireAt: String(value).trim(),
+          });
+        } else {
+          try {
+            const { emit } = require('../../backend/utils/rendererEvents');
+            emit('weightAdjustment:featureStatus', {
+              available: false,
+              expired: true,
+              ...WeightAdjustmentService.getFeatureStatus(),
+            });
+          } catch (_e) {
+            /* optional */
+          }
+        }
+        return {
+          key: ADMIN_EXPIRE_KEY,
+          value: WeightAdjustmentService.getExpireAtRaw(),
+        };
+      }
     }
 
     const result = SettingsService.set(key, value);

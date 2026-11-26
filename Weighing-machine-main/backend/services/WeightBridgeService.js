@@ -6,7 +6,7 @@ const ts = require('../utils/timestamp');
 
 const DEFAULTS = Object.freeze({
   port: 'COM4',
-  baudRate: 2400,
+  baudRate: 1200,
   dataBits: 7,
   parity: 'none',
   stopBits: 1,
@@ -14,9 +14,13 @@ const DEFAULTS = Object.freeze({
   stableWindowSize: 5,
   stableToleranceKg: 2,
   zeroHoldMs: 2500,
+  /** If no usable weight frame arrives this long after a positive reading, force empty. */
+  staleWeightMs: 5000,
 });
 
 const ALTERNATE_BAUD_CONFIGS = [
+  { baudRate: 1200, dataBits: 7, parity: 'none', stopBits: 1 },
+  { baudRate: 1200, dataBits: 8, parity: 'none', stopBits: 1 },
   { baudRate: 2400, dataBits: 7, parity: 'none', stopBits: 1 },
   { baudRate: 2400, dataBits: 7, parity: 'even', stopBits: 1 },
   { baudRate: 2400, dataBits: 7, parity: 'odd', stopBits: 1 },
@@ -24,7 +28,6 @@ const ALTERNATE_BAUD_CONFIGS = [
   { baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1 },
   { baudRate: 4800, dataBits: 8, parity: 'none', stopBits: 1 },
   { baudRate: 19200, dataBits: 8, parity: 'none', stopBits: 1 },
-  { baudRate: 1200, dataBits: 8, parity: 'none', stopBits: 1 },
 ];
 
 const POLL_COMMANDS = [
@@ -53,6 +56,7 @@ class WeightBridgeService {
       stableWindowSize: Number(config.stableWindowSize || DEFAULTS.stableWindowSize),
       stableToleranceKg: Number(config.stableToleranceKg || DEFAULTS.stableToleranceKg),
       zeroHoldMs: Number(config.zeroHoldMs || DEFAULTS.zeroHoldMs),
+      staleWeightMs: Number(config.staleWeightMs || DEFAULTS.staleWeightMs),
     };
 
     this.port = null;
@@ -72,6 +76,8 @@ class WeightBridgeService {
     this.textBuffer = '';
     this.zeroCandidateSince = null;
     this._lastRawLogAt = 0;
+    this._lastWeightAcceptedAt = 0;
+    this._staleWeightTimer = null;
     this._portClosing = false;
     this._totalBytesReceived = 0;
     this._sessionBytes = 0;
@@ -97,6 +103,7 @@ class WeightBridgeService {
   async stop() {
     this.intentionalClose = true;
     this._clearNoDataTimer();
+    this._clearStaleWeightTimer();
     this._stopPolling();
     this._clearReconnect();
     await this._closePort();
@@ -223,6 +230,66 @@ class WeightBridgeService {
       clearTimeout(this._noDataTimer);
       this._noDataTimer = null;
     }
+  }
+
+  _clearStaleWeightTimer() {
+    if (this._staleWeightTimer) {
+      clearTimeout(this._staleWeightTimer);
+      this._staleWeightTimer = null;
+    }
+  }
+
+  _scheduleStaleWeightCheck() {
+    this._clearStaleWeightTimer();
+    if (!(this.latestWeight > 0 || this.latestStableWeight > 0)) return;
+    const ms = Math.max(1000, Number(this.config.staleWeightMs) || DEFAULTS.staleWeightMs);
+    this._staleWeightTimer = setTimeout(() => {
+      this._staleWeightTimer = null;
+      this._onStaleWeightTimeout();
+    }, ms);
+    if (this._staleWeightTimer.unref) this._staleWeightTimer.unref();
+  }
+
+  _onStaleWeightTimeout() {
+    if (!(this.latestWeight > 0 || this.latestStableWeight > 0)) return;
+    logger.logDevice('weighbridge', 'info', 'Stale weight — forcing empty', {
+      port: this.config.port,
+      lastWeight: this.latestWeight,
+      lastStable: this.latestStableWeight,
+      staleWeightMs: this.config.staleWeightMs,
+    });
+    this._forceEmptyWeight('stale');
+  }
+
+  /** Site idle stream often never forms a full 4–7 digit frame — clear stuck kg. */
+  _forceEmptyWeight(reason = 'forced') {
+    if (!(this.latestWeight > 0 || this.latestStableWeight > 0 || this.lastEmittedWeight > 0)) {
+      return;
+    }
+    this.zeroCandidateSince = Date.now() - (Number(this.config.zeroHoldMs) || 0) - 1;
+    this.buffer = Array(Math.max(1, this.config.stableWindowSize)).fill(0);
+    this._consumeLine('0');
+    logger.logDevice('weighbridge', 'info', 'Forced empty weight', {
+      port: this.config.port,
+      reason,
+    });
+  }
+
+  _noteWeightAccepted(parsed) {
+    this._lastWeightAcceptedAt = Date.now();
+    if (parsed > 0) {
+      this._scheduleStaleWeightCheck();
+    } else {
+      this._clearStaleWeightTimer();
+    }
+  }
+
+  _isZeroLikePayload(buf) {
+    const text = String(buf || '')
+      .replace(/\0/g, ' ')
+      .trim();
+    if (!text) return false;
+    return /^[+-]?0+$/.test(text);
   }
 
   getCurrentWeight() {
@@ -401,25 +468,12 @@ class WeightBridgeService {
     const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
     if (!text) return;
 
+    // Once STX opens a frame, later chunks often contain only digits/spaces
+    // (no STX/ETX). Those must stay on the STX path — otherwise weight updates
+    // arrive late/wrong via the undelimited fragment parser.
     const hasStxEtx = text.includes('\x02') || text.includes('\x03');
-    if (hasStxEtx) {
-      for (let i = 0; i < text.length; i += 1) {
-        const ch = text[i];
-        if (ch === '\x02') {
-          this.stxFrameBuffer = '';
-          continue;
-        }
-        if (ch === '\x03') {
-          if (this.stxFrameBuffer !== null) {
-            this._consumeLine(this.stxFrameBuffer);
-          }
-          this.stxFrameBuffer = null;
-          continue;
-        }
-        if (this.stxFrameBuffer !== null) {
-          this.stxFrameBuffer += ch;
-        }
-      }
+    if (this.stxFrameBuffer !== null || hasStxEtx) {
+      this._handleStxStream(text);
       return;
     }
 
@@ -434,6 +488,77 @@ class WeightBridgeService {
     }
 
     this._drainFixedWidthFrames();
+  }
+
+  /**
+   * STX/ETX (or continuous STX) indicator framing.
+   * Only emit complete payloads — never flush half-digit fragments on the next STX.
+   */
+  _handleStxStream(text) {
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i];
+      if (ch === '\x02') {
+        if (this.stxFrameBuffer !== null) {
+          // Empty-scale idle often sends STX + short "0"/spaces, then another STX
+          // before a 4–7 digit frame forms. Accept zero-like leftovers only.
+          this._flushStxFrame(this.stxFrameBuffer, {
+            requireComplete: true,
+            acceptZeroLike: true,
+          });
+        }
+        this.stxFrameBuffer = '';
+        continue;
+      }
+      if (ch === '\x03') {
+        if (this.stxFrameBuffer !== null) {
+          this._flushStxFrame(this.stxFrameBuffer, { requireComplete: false });
+        }
+        this.stxFrameBuffer = null;
+        continue;
+      }
+      if (this.stxFrameBuffer === null) {
+        continue;
+      }
+      this.stxFrameBuffer += ch;
+      // Site indicator often ends a weight with a trailing space: "   52450 ".
+      if (this._isCompleteStxPayload(this.stxFrameBuffer)) {
+        const trailingSpace = /\d\s+$/.test(this.stxFrameBuffer);
+        const solidDigits = /^\s*[+-]?\d{6}\s*$/.test(this.stxFrameBuffer);
+        const zeroLike =
+          this._isZeroLikePayload(this.stxFrameBuffer) &&
+          (trailingSpace || /^\s*[+-]?0+\s*$/.test(this.stxFrameBuffer));
+        if (trailingSpace || solidDigits || zeroLike) {
+          this._flushStxFrame(this.stxFrameBuffer, { requireComplete: true });
+          this.stxFrameBuffer = null;
+        }
+      }
+    }
+  }
+
+  _isCompleteStxPayload(buf) {
+    const text = String(buf || '')
+      .replace(/\0/g, ' ')
+      .trim();
+    if (!text) return false;
+    if (/^[SNEB]\s*[+-]?\d{4,7}$/i.test(text)) return true;
+    if (/^[+-]?\d{4,7}$/.test(text)) return true;
+    // Empty bridge often emits short zero frames ("0", "00", "000").
+    if (/^[+-]?0{1,7}$/.test(text)) return true;
+    return false;
+  }
+
+  _flushStxFrame(buf, options = {}) {
+    const requireComplete = options.requireComplete !== false;
+    const acceptZeroLike = !!options.acceptZeroLike;
+    const raw = String(buf || '');
+    if (!raw.trim()) return;
+    if (requireComplete && !this._isCompleteStxPayload(raw)) {
+      if (acceptZeroLike && this._isZeroLikePayload(raw)) {
+        this._consumeLine(raw.trim());
+      }
+      return;
+    }
+    this._consumeLine(raw);
   }
 
   /**
@@ -511,11 +636,19 @@ class WeightBridgeService {
       this.buffer.shift();
     }
 
-    this.isStable = this._computeStable();
-    if (this.isStable) {
-      this.latestStableWeight = parsed;
+    if (parsed === 0) {
+      // Empty bridge must clear the previous stable truck reading immediately.
+      this.buffer = Array(Math.max(1, this.config.stableWindowSize)).fill(0);
+      this.latestStableWeight = 0;
+      this.isStable = true;
+    } else {
+      this.isStable = this._computeStable();
+      if (this.isStable) {
+        this.latestStableWeight = parsed;
+      }
     }
 
+    this._noteWeightAccepted(parsed);
     this._emitWeightChanged(parsed);
     logger.logDevice('weighbridge', 'info', 'Weight parsed', {
       port: this.config.port,
@@ -591,6 +724,13 @@ class WeightBridgeService {
       if (Number.isFinite(kgValue)) return Math.round(kgValue);
     }
 
+    // New continuous STX frames: "   14640" / "14640" (4–6 digit kg, no ETX)
+    const spacedKg = text.match(/^\s*(-?\d{4,6})\s*$/);
+    if (spacedKg) {
+      const kgValue = Number(spacedKg[1]);
+      if (Number.isFinite(kgValue)) return Math.round(kgValue);
+    }
+
     // Six-digit weighbridge frames (e.g. "012345" or " 12345 ")
     const sixDigit = text.match(/(^|[^\d])(\d{4,6})([^\d]|$)/);
     if (sixDigit) {
@@ -651,6 +791,11 @@ class WeightBridgeService {
       if (this._isFragmentOf(parsed, ref)) return true;
     }
 
+    // 4-digit prefixes of a 5-digit truck weight ("1469" from "14690", "5294" from "52930").
+    if (ref >= 10000 && parsed >= 1000 && parsed < 10000 && this._isFragmentOf(parsed, ref)) {
+      return true;
+    }
+
     if (ref >= 5000 && parsed > 0 && parsed < ref * 0.2 && this._isFragmentOf(parsed, ref)) {
       return true;
     }
@@ -660,12 +805,13 @@ class WeightBridgeService {
 }
 
 const PROBE_BAUD_CONFIGS = [
+  { baudRate: 1200, dataBits: 7, parity: 'none', stopBits: 1 },
+  { baudRate: 1200, dataBits: 8, parity: 'none', stopBits: 1 },
   { baudRate: 2400, dataBits: 7, parity: 'none', stopBits: 1 },
   { baudRate: 2400, dataBits: 7, parity: 'even', stopBits: 1 },
   { baudRate: 2400, dataBits: 7, parity: 'odd', stopBits: 1 },
   { baudRate: 2400, dataBits: 8, parity: 'none', stopBits: 1 },
   { baudRate: 9600, dataBits: 8, parity: 'none', stopBits: 1 },
-  { baudRate: 1200, dataBits: 8, parity: 'none', stopBits: 1 },
 ];
 
 function probeSerialPort(path, serialConfig, durationMs = 3000) {

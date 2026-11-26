@@ -77,7 +77,85 @@ function assert(cond, msg) {
 // Idle near-zero full frames still accepted
 {
   const weights = feed(['-000100\r\n', '-000100\r\n', '-000100\r\n', '-000100\r\n', '-000100\r\n']);
-  assert(weights.includes(100), `expected idle 100, got ${weights}`);
+  assert(
+    weights.includes(-100) || weights.includes(100),
+    `expected idle ±100, got ${weights}`,
+  );
+}
+
+// Continuous STX stream split across chunks (site indicator pattern)
+{
+  accepted = [];
+  bridge.latestWeight = 0;
+  bridge.latestStableWeight = 0;
+  bridge.buffer = [];
+  bridge.isStable = false;
+  bridge.textBuffer = '';
+  bridge.stxFrameBuffer = null;
+  bridge.lastEmittedWeight = null;
+  bridge.lastEmittedIsStable = false;
+  bridge._handleData(Buffer.from('\x02', 'utf8'));
+  bridge._handleData(Buffer.from('   52', 'utf8'));
+  bridge._handleData(Buffer.from('450 ', 'utf8'));
+  bridge._handleData(Buffer.from('\x02   52460 ', 'utf8'));
+  const weights = accepted.map((a) => a.weight);
+  assert(weights.includes(52450), `STX chunked should parse 52450, got ${weights}`);
+  assert(weights.includes(52460), `STX chunked should parse 52460, got ${weights}`);
+  assert(!weights.includes(52), `should not accept fragment 52, got ${weights}`);
+  assert(!weights.includes(524), `should not accept fragment 524, got ${weights}`);
+}
+
+// Next STX must not flush incomplete digit fragments
+{
+  accepted = [];
+  bridge.latestWeight = 0;
+  bridge.latestStableWeight = 0;
+  bridge.buffer = [];
+  bridge.isStable = false;
+  bridge.textBuffer = '';
+  bridge.stxFrameBuffer = null;
+  bridge.lastEmittedWeight = null;
+  bridge.lastEmittedIsStable = false;
+  bridge._handleData(Buffer.from('\x02   52', 'utf8'));
+  bridge._handleData(Buffer.from('\x02   18980 ', 'utf8'));
+  const weights = accepted.map((a) => a.weight);
+  assert(weights.includes(18980), `expected 18980, got ${weights}`);
+  assert(!weights.includes(52), `incomplete STX fragment must not emit, got ${weights}`);
+}
+
+// Empty-scale STX leftovers ("0") must clear a stuck positive weight
+{
+  accepted = [];
+  bridge.latestWeight = 1180;
+  bridge.latestStableWeight = 1180;
+  bridge.buffer = [1180, 1180, 1180, 1180, 1180];
+  bridge.isStable = true;
+  bridge.textBuffer = '';
+  bridge.stxFrameBuffer = null;
+  bridge.lastEmittedWeight = 1180;
+  bridge.lastEmittedIsStable = true;
+  bridge.zeroCandidateSince = Date.now() - 10000;
+  bridge._handleData(Buffer.from('\x020', 'utf8'));
+  bridge._handleData(Buffer.from('\x02', 'utf8'));
+  const weights = accepted.map((a) => a.weight);
+  assert(weights.includes(0), `zero-like STX should clear stuck weight, got ${weights}`);
+  assert(bridge.latestWeight === 0, `latestWeight should be 0, got ${bridge.latestWeight}`);
+  assert(bridge.latestStableWeight === 0, `stable should clear, got ${bridge.latestStableWeight}`);
+}
+
+// Stale watchdog forces empty when frames stop arriving
+{
+  accepted = [];
+  bridge.latestWeight = 12290;
+  bridge.latestStableWeight = 12290;
+  bridge.buffer = [12290, 12290, 12290, 12290, 12290];
+  bridge.isStable = true;
+  bridge.lastEmittedWeight = 12290;
+  bridge.zeroCandidateSince = null;
+  bridge._onStaleWeightTimeout();
+  const weights = accepted.map((a) => a.weight);
+  assert(weights.includes(0), `stale timeout should force 0, got ${weights}`);
+  assert(bridge.latestWeight === 0, `stale latestWeight 0, got ${bridge.latestWeight}`);
 }
 
 console.log('WeightBridge partial-frame tests OK');

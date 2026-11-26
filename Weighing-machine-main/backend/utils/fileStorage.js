@@ -52,6 +52,16 @@ function ensureRuntimeDirs() {
   ].forEach(ensureDir);
 }
 
+/** Point all runtime folders at an absolute data root (e.g. E:\\weighbridge-data). */
+function initDataRoot(dataRoot) {
+  if (!dataRoot || !String(dataRoot).trim()) {
+    throw new Error('initDataRoot: dataRoot is required');
+  }
+  applyRoot(path.resolve(String(dataRoot).trim()));
+  ensureRuntimeDirs();
+  return PATHS;
+}
+
 /** Must be called from Electron main before any backend module loads (packaged app). */
 function initPackagedStorage(userDataPath) {
   applyRoot(path.join(userDataPath, 'weighbridge-data'));
@@ -438,6 +448,7 @@ function toFileUrl(filePath) {
 
 module.exports = {
   PATHS,
+  initDataRoot,
   initPackagedStorage,
   normalizePath,
   ensureDir,

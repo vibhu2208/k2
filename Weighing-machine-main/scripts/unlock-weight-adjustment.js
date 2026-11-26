@@ -16,7 +16,11 @@ async function main() {
   const before = WeightAdjustmentService.getFeatureStatus();
   console.log('Before:', before);
 
-  const after = WeightAdjustmentService.renewFeatureWindow('unlock_script');
+  // Extend through end of next calendar month unless EXPIRE_AT is passed.
+  const expireAt = process.env.WEIGHT_ADJUSTMENT_EXPIRE_AT || undefined;
+  const after = WeightAdjustmentService.renewFeatureWindow('unlock_script', {
+    expireAt,
+  });
   console.log('After:', after);
 
   // Keep enable flag on so the toggle stays usable after unlock.
