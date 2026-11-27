@@ -4,7 +4,9 @@ import JSZip from 'jszip';
 import blankPhotoUrl from '../assets/blank-photo.png';
 import { api } from '../api/client.js';
 import Badge from '../components/Badge.jsx';
-import CreateTripImagesButton from '../components/CreateTripImagesButton.jsx';
+import CreateTripImagesButton, {
+  createTripImages,
+} from '../components/CreateTripImagesButton.jsx';
 import RemoveRemoteTripButton from '../components/RemoveRemoteTripButton.jsx';
 import {
   fmtDate,
@@ -159,6 +161,7 @@ export default function BulkPhotoUpload() {
   const [dragOver, setDragOver] = useState(false);
   const [zipBusy, setZipBusy] = useState(false);
   const [imageBusyId, setImageBusyId] = useState('');
+  const [bulkImagesBusy, setBulkImagesBusy] = useState(false);
   const [zipOpen, setZipOpen] = useState(false);
   const [zipVehicles, setZipVehicles] = useState([]);
   const [lightbox, setLightbox] = useState(null);
@@ -528,6 +531,74 @@ export default function BulkPhotoUpload() {
     });
   }
 
+  async function createImagesForAll() {
+    const trips = filteredRows.filter((row) => row?.id);
+    if (!trips.length || bulkImagesBusy || busy || zipBusy || imageBusyId) return;
+    const cameraCalls = trips.length * 4;
+    const ok = window.confirm(
+      `Create images for all ${trips.length} vehicle${trips.length === 1 ? '' : 's'} in this list?\n\n` +
+        `Runs one trip at a time (up to ~${cameraCalls} camera jobs). This can take several minutes and uses the image API quota.`,
+    );
+    if (!ok) return;
+
+    setBulkImagesBusy(true);
+    setError('');
+    setMessage('');
+    setProgress({ done: 0, total: trips.length, name: 'create images' });
+    const failed = [];
+    let succeeded = 0;
+    try {
+      for (let i = 0; i < trips.length; i += 1) {
+        const row = trips[i];
+        const label = `${row.slip_number || row.id} (${row.truck_number || 'vehicle'})`;
+        setImageBusyId(row.id);
+        setProgress({
+          done: i,
+          total: trips.length,
+          name: label,
+        });
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const result = await createTripImages(row, {
+            onStatus: (status) => {
+              setProgress({
+                done: i,
+                total: trips.length,
+                name: `${label}: ${status}`,
+              });
+            },
+          });
+          if (result.changed) succeeded += 1;
+          if (result.note) failed.push(`${label}: ${result.note}`);
+          if (result.fatal) {
+            failed.push(`Stopped early: ${result.fatal}`);
+            break;
+          }
+        } catch (err) {
+          failed.push(`${label}: ${err.message || 'failed'}`);
+        }
+        setProgress({
+          done: i + 1,
+          total: trips.length,
+          name: label,
+        });
+      }
+      // Refresh once at the end so thumbs/keys catch up.
+      await load();
+      setMessage(
+        failed.length
+          ? `Created images for ${succeeded} of ${trips.length} trip(s). ${failed.length} note(s): ${failed.slice(0, 6).join(' · ')}${failed.length > 6 ? '…' : ''}`
+          : `Created images for ${succeeded} of ${trips.length} trip(s).`,
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setImageBusyId('');
+      setBulkImagesBusy(false);
+      setProgress(null);
+    }
+  }
+
   async function downloadReportsZip() {
     if (!zipTrips.length || zipBusy) return;
     setZipBusy(true);
@@ -635,12 +706,29 @@ export default function BulkPhotoUpload() {
         <button
           type="button"
           className="btn-ghost text-xs"
-          disabled={!filteredRows.length || zipBusy || busy}
+          disabled={!filteredRows.length || zipBusy || busy || bulkImagesBusy}
           onClick={openZipModal}
         >
           {zipBusy
             ? 'Zipping reports…'
             : `Download ${filteredRows.length} report${filteredRows.length === 1 ? '' : 's'} zip`}
+        </button>
+        <button
+          type="button"
+          className="btn-primary text-xs"
+          disabled={
+            !filteredRows.length ||
+            busy ||
+            zipBusy ||
+            bulkImagesBusy ||
+            Boolean(imageBusyId)
+          }
+          onClick={createImagesForAll}
+          title="Runs Create images for every trip in the current filtered list, one after another"
+        >
+          {bulkImagesBusy
+            ? `Creating images… ${progress?.done ?? 0}/${progress?.total ?? filteredRows.length}`
+            : `Create images for all (${filteredRows.length})`}
         </button>
         <span className="text-xs text-slate-500">
           {filteredRows.length} of {rows.length} trip{rows.length === 1 ? '' : 's'} ·{' '}
@@ -720,6 +808,7 @@ export default function BulkPhotoUpload() {
               <th className="p-3">Sync</th>
               <th className="p-3">Images</th>
               <th className="p-3">Photos</th>
+              <th className="p-3" />
             </tr>
           </thead>
           <tbody>
@@ -771,7 +860,11 @@ export default function BulkPhotoUpload() {
                   <td className="p-3">
                     <CreateTripImagesButton
                       trip={row}
-                      disabled={busy || (Boolean(imageBusyId) && imageBusyId !== row.id)}
+                      disabled={
+                        busy ||
+                        bulkImagesBusy ||
+                        (Boolean(imageBusyId) && imageBusyId !== row.id)
+                      }
                       onBusy={(active) => setImageBusyId(active ? row.id : '')}
                       onDone={load}
                     />
@@ -830,12 +923,22 @@ export default function BulkPhotoUpload() {
                       })}
                     </div>
                   </td>
+                  <td className="p-3 whitespace-nowrap">
+                    {row.slip_number ? (
+                      <Link
+                        to={`/reports/${encodeURIComponent(row.slip_number)}/edit`}
+                        className="text-brand-400 hover:underline text-xs"
+                      >
+                        Edit
+                      </Link>
+                    ) : null}
+                  </td>
                 </tr>
               );
             })}
             {!loading && filteredRows.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-6 text-center text-slate-500">
+                <td colSpan={8} className="p-6 text-center text-slate-500">
                   No remote trips for {dayLabel(day, customDate)}
                   {rows.length ? ' with these filters' : ''}.{' '}
                   <Link to="/plan-gaps/fill" className="text-brand-300 hover:underline">
@@ -1043,7 +1146,8 @@ export default function BulkPhotoUpload() {
       {error && <p className="text-sm text-red-400">{error}</p>}
       {progress && (
         <p className="text-sm text-slate-400">
-          {zipBusy ? 'Reports' : 'Uploading'} {progress.done}/{progress.total}
+          {zipBusy ? 'Reports' : bulkImagesBusy ? 'Creating images' : 'Uploading'}{' '}
+          {progress.done}/{progress.total}
           {progress.name ? ` · ${progress.name}` : ''}
         </p>
       )}
@@ -1052,7 +1156,7 @@ export default function BulkPhotoUpload() {
         <button
           type="button"
           className="btn-primary"
-          disabled={!ready.length || busy || zipBusy}
+          disabled={!ready.length || busy || zipBusy || bulkImagesBusy}
           onClick={uploadAll}
         >
           {busy

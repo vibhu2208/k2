@@ -248,7 +248,7 @@ function normalizeAdminSlipNumber(input) {
   return `${prefix}${String(num).padStart(4, '0')}`;
 }
 
-router.post('/:slip/edit', async (req, res) => {
+router.post('/:slip/edit', requireRole('admin'), async (req, res) => {
   try {
     const siteId = getSiteId();
     const slip = String(req.params.slip || '').trim();

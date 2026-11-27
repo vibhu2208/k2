@@ -13,6 +13,14 @@ const pdfLimiter = rateLimit({
   legacyHeaders: false,
   message: { ok: false, error: 'Too many PDF requests — slow down' },
 });
+
+const generatePhotoLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: Number(process.env.GENERATE_PHOTO_RATE_LIMIT_PER_MIN) || 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many image generation requests — slow down' },
+});
 const {
   createRemoteTrip,
   updateRemoteTrip,
@@ -212,7 +220,15 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-router.post('/:id/generate-photo', requireRole('admin'), async (req, res) => {
+function publicGeneratePhotoError(message) {
+  const raw = String(message || '').trim() || 'Could not create image';
+  if (/GEMINI_API_KEY/i.test(raw)) return 'Image generation is not configured';
+  if (/S3 not configured/i.test(raw)) return 'Photo storage is not configured';
+  if (/free tier|Enable billing/i.test(raw)) return 'Image generation quota exceeded';
+  return raw;
+}
+
+router.post('/:id/generate-photo', requireRole('admin'), generatePhotoLimiter, async (req, res) => {
   try {
     const result = await generateRemoteTripPhoto(query, req.params.id, req.body || {});
     return res.json({
@@ -224,7 +240,7 @@ router.post('/:id/generate-photo', requireRole('admin'), async (req, res) => {
     });
   } catch (err) {
     const status = /Gemini image edit failed|timed out/.test(err.message) ? 502 : 400;
-    return res.status(status).json({ ok: false, error: err.message });
+    return res.status(status).json({ ok: false, error: publicGeneratePhotoError(err.message) });
   }
 });
 
